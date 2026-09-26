@@ -1,0 +1,7 @@
+python_dependencies:
+  - "psycopg[binary]>=3.1,<4"
+name: gnos-learning-os
+version: 0.1.0
+description: "GNOS Learning Dashboard — interface V1 para a jornada de estudos."
+author: forge
+kind: standalone
