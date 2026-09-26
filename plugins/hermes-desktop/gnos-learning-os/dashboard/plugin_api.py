@@ -246,12 +246,14 @@ def _ensure_schema() -> None:
 
 
 # --------------------------------------------------------------------------
-# Seed - deterministic DevOps journey fixture, matching the V1 mock content,
-# now backed by real rows instead of a renderer-side literal. Only runs once
-# (checked via a marker row) so it never clobbers real learner progress.
+# Legacy demo fixture
+#
+# This function is intentionally retained only as a development helper for
+# backwards-compatible local experiments. Production routes MUST NOT call it:
+# the learner dashboard is populated exclusively by Didaktos sync events.
 # --------------------------------------------------------------------------
 
-def _seed_if_empty(conn: psycopg.Connection) -> None:
+def _seed_demo_fixture_for_local_development(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
         cur.execute(f"SELECT COUNT(*) AS n FROM {SCHEMA}.tracks")
         existing = cur.fetchone()["n"]
@@ -417,9 +419,13 @@ def _seed_if_empty(conn: psycopg.Connection) -> None:
 
 
 def _ensure_seeded() -> None:
+    """Ensure durable storage exists without inventing learner data.
+
+    The historical name is kept because every route uses this guard. It no
+    longer seeds the DevOps demo; visible rows must originate in a Didaktos
+    publication/synchronization event.
+    """
     _ensure_schema()
-    with _connect() as conn:
-        _seed_if_empty(conn)
 
 
 # --------------------------------------------------------------------------
@@ -473,11 +479,15 @@ async def get_today():
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            f"SELECT * FROM {SCHEMA}.sessions WHERE status = 'in_progress' ORDER BY updated_at DESC LIMIT 1"
+            f"SELECT * FROM {SCHEMA}.sessions WHERE track_id LIKE 'track-course-%' "
+            "AND status = 'in_progress' ORDER BY updated_at DESC LIMIT 1"
         )
         session = cur.fetchone()
         if session is None:
-            cur.execute(f"SELECT * FROM {SCHEMA}.sessions ORDER BY planned_date DESC LIMIT 1")
+            cur.execute(
+                f"SELECT * FROM {SCHEMA}.sessions WHERE track_id LIKE 'track-course-%' "
+                "ORDER BY planned_date DESC LIMIT 1"
+            )
             session = cur.fetchone()
         track = None
         if session and session["track_id"]:
@@ -502,7 +512,9 @@ async def get_today():
 async def list_tracks():
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.tracks ORDER BY created_at ASC")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.tracks WHERE id LIKE 'track-course-%' ORDER BY created_at ASC"
+        )
         rows = cur.fetchall()
     return {"tracks": [_track_dict(r) for r in rows]}
 
@@ -531,11 +543,15 @@ async def get_timeline():
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            f"SELECT * FROM {SCHEMA}.timeline_entries WHERE source = 'planned' ORDER BY created_at ASC"
+            f"SELECT t.* FROM {SCHEMA}.timeline_entries t JOIN {SCHEMA}.sessions s "
+            "ON s.id = t.session_id WHERE s.track_id LIKE 'track-course-%' "
+            "AND t.source = 'planned' ORDER BY t.created_at ASC"
         )
         planned = cur.fetchall()
         cur.execute(
-            f"SELECT * FROM {SCHEMA}.timeline_entries WHERE source = 'actual' ORDER BY created_at ASC"
+            f"SELECT t.* FROM {SCHEMA}.timeline_entries t JOIN {SCHEMA}.sessions s "
+            "ON s.id = t.session_id WHERE s.track_id LIKE 'track-course-%' "
+            "AND t.source = 'actual' ORDER BY t.created_at ASC"
         )
         actual = cur.fetchall()
     return {"planned": [dict(r) for r in planned], "actual": [dict(r) for r in actual]}
@@ -556,7 +572,9 @@ async def get_session(session_id: str):
 async def list_assessments():
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.assessments ORDER BY created_at ASC")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.assessments WHERE id LIKE 'assessment-course-%' ORDER BY created_at ASC"
+        )
         rows = cur.fetchall()
     return {"assessments": [_assessment_dict(r) for r in rows]}
 
@@ -575,7 +593,9 @@ async def list_evidence():
 async def list_resources():
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.resources ORDER BY created_at ASC")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.resources WHERE id LIKE 'resource-course-%' ORDER BY created_at ASC"
+        )
         rows = cur.fetchall()
     return {"resources": [dict(r) for r in rows]}
 
@@ -584,7 +604,9 @@ async def list_resources():
 async def list_projects():
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.projects ORDER BY created_at ASC")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.projects WHERE id LIKE 'project-course-%' ORDER BY created_at ASC"
+        )
         rows = cur.fetchall()
     return {"projects": [dict(r) for r in rows]}
 
@@ -594,7 +616,10 @@ async def list_labs():
     """List available labs so the renderer never depends on a fixture id."""
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.labs ORDER BY created_at ASC")
+        cur.execute(
+            f"SELECT l.* FROM {SCHEMA}.labs l JOIN {SCHEMA}.sessions s ON s.id = l.session_id "
+            "WHERE s.track_id LIKE 'track-course-%' ORDER BY l.created_at ASC"
+        )
         rows = cur.fetchall()
     return {"labs": [_lab_dict(r) for r in rows]}
 

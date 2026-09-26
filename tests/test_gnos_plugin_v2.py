@@ -133,6 +133,7 @@ class GnosPluginBackendTests(unittest.TestCase):
         self.api._SCHEMA_DDL = re.sub(
             rf"\b{self._orig_schema_const}\b", self._schema, self._orig_ddl
         )
+        self._create_real_course_fixture()
 
     def tearDown(self):
         with self.api._connect() as conn, conn.cursor() as cur:
@@ -145,18 +146,62 @@ class GnosPluginBackendTests(unittest.TestCase):
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_today_reflects_seeded_in_progress_session(self):
+    def _create_real_course_fixture(self):
+        """Explicit course-origin data; routes must never auto-seed demos."""
+        self.api._ensure_schema()
+        now = self.api._now()
+        with self.api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.tracks "
+                "(id, title, stage, status, detail, competencies_json, created_at, updated_at) "
+                "VALUES ('track-course-test', 'Curso de teste', 'working', 'practicing', "
+                "'Sessão real de teste', '[]', %s, %s)", (now, now),
+            )
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.sessions "
+                "(id, track_id, kind, planned_topic, actual_topic, planned_date, actual_date, "
+                "objectives_json, activities_json, objective, teacher, blocks_json, status, started_at, "
+                "next_step, created_at, updated_at) VALUES "
+                "('session-course-test', 'track-course-test', 'lesson', 'Sessão de teste', "
+                "'Sessão de teste', '2026-09-26', '2026-09-26', '[]', '[]', 'Objetivo de teste', "
+                "'Didaktos', '[]', 'in_progress', %s, 'Próximo passo', %s, %s)",
+                (now, now, now),
+            )
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.timeline_entries "
+                "(id, session_id, source, entry_date, kind, text, adaptive_reason, created_at) "
+                "VALUES ('timeline-course-test', 'session-course-test', 'actual', '2026-09-26', "
+                "'lesson', 'Sessão de teste', NULL, %s)", (now,),
+            )
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.labs "
+                "(id, session_id, title, objective, environment_json, allowed_tools_json, task, "
+                "expected_behavior, deterministic_checks_json, status, terminal_output, created_at, updated_at) "
+                "VALUES ('lab-course-test', 'session-course-test', 'Lab de teste', 'Objetivo', "
+                "'{}', '[]', 'Tarefa', 'Resultado', "
+                "'[{\"name\": \"check\", \"expect\": \"pass\"}]', 'not_started', '', %s, %s)",
+                (now, now),
+            )
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.assessments "
+                "(id, session_id, title, type, status, result, help_used, evidence_count, created_at, updated_at) "
+                "VALUES ('assessment-course-test', 'session-course-test', 'Avaliação de teste', "
+                "'exercise', 'planned', NULL, '-', 0, %s, %s)", (now, now),
+            )
+            conn.commit()
+
+    def test_today_reflects_a_course_origin_in_progress_session(self):
         today = self._run(self.api.get_today())
         self.assertEqual(today["status"], "in_progress")
-        self.assertIn("Docker Networking", today["session"])
+        self.assertEqual("Sessão de teste", today["session"])
 
     def test_timeline_planned_is_never_mutated_by_session_actions(self):
         before = self._run(self.api.get_timeline())
         planned_before = before["planned"]
-        self._run(self.api.start_session("session-docker-networking"))
+        self._run(self.api.start_session("session-course-test"))
         self._run(
             self.api.complete_session(
-                "session-docker-networking",
+                "session-course-test",
                 self.api.SessionCompleteBody(next_step="Novo próximo passo"),
             )
         )
@@ -165,12 +210,12 @@ class GnosPluginBackendTests(unittest.TestCase):
         self.assertGreater(len(after["actual"]), len(before["actual"]))
 
     def test_lab_lifecycle_start_check_reset_never_deletes_check_history(self):
-        lab_id = "lab-dns-entre-containers"
+        lab_id = "lab-course-test"
         labs = self._run(self.api.list_labs())["labs"]
         self.assertIn(lab_id, [lab["id"] for lab in labs])
         self._run(self.api.start_lab(lab_id))
         checked = self._run(self.api.check_lab(lab_id))
-        self.assertEqual(checked["status"], "failed")  # seeded lab is not yet fixed
+        self.assertEqual(checked["status"], "failed")  # no fabricated success
         self.assertTrue(checked["checks"])
         n_checks_before_reset = len(checked["checks"])
         reset = self._run(self.api.reset_lab(lab_id))

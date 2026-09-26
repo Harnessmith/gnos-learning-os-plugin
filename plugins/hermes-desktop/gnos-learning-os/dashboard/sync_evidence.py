@@ -342,6 +342,53 @@ def sync_lesson_session(workspace_root: Path, learner: str, course_id: str,
                  lesson["purpose"], teacher, json.dumps(blocks),
                  now, next_step, now, now),
             )
+
+            # Course bibliography is the source of truth for the Resources
+            # screen. A publication can be repeated safely: the stable
+            # course/source identifier updates metadata without duplicating it.
+            for source_id, source in course.get("sources", {}).items():
+                resource_id = f"resource-course-{course_id}-{source_id}"
+                title = source.get("title") or source_id
+                source_type = source.get("type") or "Fonte"
+                sections = ", ".join(source.get("sections") or [])
+                notes = source.get("verification_notes") or ""
+                detail = ". ".join(part for part in (sections, notes) if part) or None
+                cur.execute(
+                    f"""
+                    INSERT INTO {plugin_api.SCHEMA}.resources
+                        (id, type, title, detail, url, provenance, created_at)
+                    VALUES (%s, %s, %s, %s, %s, 'course-source', %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        type = EXCLUDED.type, title = EXCLUDED.title,
+                        detail = EXCLUDED.detail, url = EXCLUDED.url,
+                        provenance = EXCLUDED.provenance
+                    """,
+                    (resource_id, source_type, title, detail, source.get("url"), now),
+                )
+
+            # Each authored exercise becomes a real, submit-ready assessment.
+            # We deliberately do not synthesize results or evidence: those are
+            # written only by an actual learner submission.
+            for exercise in lesson.get("exercises", []):
+                exercise_id = exercise.get("id")
+                if not exercise_id:
+                    continue
+                assessment_id = f"assessment-course-{course_id}-{lesson_id}-{exercise_id}"
+                criteria = exercise.get("success_criteria") or []
+                result = "Critérios: " + "; ".join(criteria) if criteria else None
+                cur.execute(
+                    f"""
+                    INSERT INTO {plugin_api.SCHEMA}.assessments
+                        (id, session_id, title, type, status, result, help_used,
+                         evidence_count, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, 'planned', %s, '-', 0, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        title = EXCLUDED.title, type = EXCLUDED.type,
+                        result = EXCLUDED.result, updated_at = EXCLUDED.updated_at
+                    """,
+                    (assessment_id, session_id, exercise.get("prompt") or exercise_id,
+                     exercise.get("response_type") or "exercise", result, now, now),
+                )
             entry_id = f"timeline-{session_id}"
             cur.execute(
                 f"""
