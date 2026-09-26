@@ -44,6 +44,12 @@ class GnosDesktopPluginRendererTests(unittest.TestCase):
         for contribution in ("ROUTES_AREA", "SIDEBAR_NAV_AREA", "PALETTE_AREA"):
             self.assertIn(contribution, self.source)
 
+    def test_uses_one_global_sidebar_entry_and_internal_navigation(self):
+        self.assertIn("id: 'gnos.nav.root'", self.source)
+        self.assertNotIn("id: `gnos.nav.${path}`", self.source)
+        self.assertIn("function GnosShell", self.source)
+        self.assertIn("aria-label': 'Navegação do GNOS Learning OS'", self.source)
+
     def test_reads_exclusively_through_the_plugin_backend(self):
         # No renderer-side mock literal, no direct filesystem/shell escape.
         self.assertNotIn("const mockGateway", self.source)

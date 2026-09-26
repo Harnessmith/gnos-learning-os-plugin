@@ -78,7 +78,73 @@ const css = {
     border: '1px solid var(--border)', borderRadius: 9, padding: '9px 15px', cursor: 'pointer', fontSize: 13.5, fontWeight: 540
   },
   divider: { height: 1, background: 'color-mix(in srgb, var(--border) 70%, transparent)', margin: '16px 0' },
-  state: { color: 'var(--muted-foreground)', padding: '56px 0', textAlign: 'center', fontSize: 14 }
+  state: { color: 'var(--muted-foreground)', padding: '56px 0', textAlign: 'center', fontSize: 14 },
+  appShell: { display: 'grid', gridTemplateColumns: '208px minmax(0, 1fr)', minHeight: '100%', width: '100%' },
+  appNav: {
+    position: 'sticky', top: 0, alignSelf: 'start', height: '100vh', padding: '22px 14px',
+    borderRight: '1px solid var(--border)', background: 'color-mix(in srgb, var(--card) 76%, transparent)'
+  },
+  brand: { display: 'flex', alignItems: 'center', gap: 11, padding: '2px 8px 20px' },
+  brandMark: {
+    width: 36, height: 36, display: 'grid', placeItems: 'center', borderRadius: 11,
+    background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 64%, var(--card)))',
+    color: 'var(--accent-foreground)', fontWeight: 800, boxShadow: '0 8px 22px -10px var(--accent)'
+  },
+  navList: { display: 'grid', gap: 4 },
+  navItem: {
+    width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 11px', borderRadius: 9,
+    border: '1px solid transparent', background: 'transparent', color: 'var(--muted-foreground)',
+    cursor: 'pointer', fontSize: 13, fontWeight: 560, textAlign: 'left'
+  },
+  navItemActive: {
+    color: 'var(--foreground)', border: '1px solid color-mix(in srgb, var(--accent) 26%, var(--border))',
+    background: 'color-mix(in srgb, var(--accent) 11%, var(--card))',
+    boxShadow: 'inset 3px 0 0 var(--accent)'
+  },
+  appContent: { minWidth: 0 }
+}
+
+function GnosShell({ active, Component }) {
+  return jsxs('div', {
+    style: css.appShell,
+    children: [
+      jsxs('aside', {
+        style: css.appNav,
+        'aria-label': 'Navegação do GNOS Learning OS',
+        children: [
+          jsxs('div', {
+            style: css.brand,
+            children: [
+              jsx('span', { style: css.brandMark, children: 'G' }),
+              jsxs('span', {
+                children: [
+                  jsx('strong', { style: { display: 'block', fontSize: 14, letterSpacing: '.02em' }, children: 'GNOS' }),
+                  jsx('small', { style: { display: 'block', marginTop: 2, color: 'var(--muted-foreground)', fontSize: 11.5 }, children: 'Learning OS' })
+                ]
+              })
+            ]
+          }),
+          jsx('nav', {
+            style: css.navList,
+            children: pages.map(([path, label, codicon]) => jsx('button', {
+              type: 'button',
+              onClick: () => host.navigate(`${BASE}/${path}`),
+              style: active === path ? { ...css.navItem, ...css.navItemActive } : css.navItem,
+              'aria-current': active === path ? 'page' : undefined,
+              children: jsxs('span', {
+                style: { display: 'contents' },
+                children: [
+                  jsx('span', { className: `codicon codicon-${codicon}`, style: { width: 17, fontSize: 15, textAlign: 'center' } }),
+                  jsx('span', { children: label })
+                ]
+              })
+            }, path))
+          })
+        ]
+      }),
+      jsx('div', { style: css.appContent, children: jsx(Component, {}) })
+    ]
+  })
 }
 
 function Page({ label, title, subtitle, children }) {
@@ -265,10 +331,17 @@ export default {
   register(ctx) {
     restImpl = (path, opts) => ctx.rest(path, opts)
     ctx.registerMany([
-      ...pages.flatMap(([path, label, codicon, Component]) => [
-        { id: `gnos.route.${path}`, area: ROUTES_AREA, data: { path: `${BASE}/${path}` }, render: () => jsx(Component, {}) },
-        { id: `gnos.nav.${path}`, area: SIDEBAR_NAV_AREA, data: { path: `${BASE}/${path}`, label, codicon } }
-      ]),
+      ...pages.map(([path, , , Component]) => ({
+        id: `gnos.route.${path}`,
+        area: ROUTES_AREA,
+        data: { path: `${BASE}/${path}` },
+        render: () => jsx(GnosShell, { active: path, Component })
+      })),
+      {
+        id: 'gnos.nav.root',
+        area: SIDEBAR_NAV_AREA,
+        data: { path: `${BASE}/today`, label: 'GNOS Learning OS', codicon: 'mortar-board' }
+      },
       { id: 'gnos.palette.open', area: PALETTE_AREA, data: { id: 'gnos.open', label: 'Abrir GNOS Learning OS', keywords: ['gnos', 'learning', 'study'], run: () => host.navigate(`${BASE}/today`) } }
     ])
   }
