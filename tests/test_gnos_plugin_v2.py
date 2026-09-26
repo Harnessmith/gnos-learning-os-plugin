@@ -87,6 +87,20 @@ class GnosDesktopPluginRendererTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, self.source)
 
+    def test_preserves_the_supplied_standalone_visual_language(self):
+        """Prevent regression to a sparse, host-theme-only shell."""
+        for marker in (
+            "--background:#090b0f",
+            "--card:#11141a",
+            "--accent:#7c5cff",
+            "gridTemplateColumns: '248px minmax(0, 1fr)'",
+            "borderRadius: 18",
+            "title: 'Foco de hoje'",
+            "width: 112, height: 112",
+        ):
+            self.assertIn(marker, self.source)
+        self.assertNotIn("maxWidth: 1120", self.source)
+
 
 class GnosPluginBackendTests(unittest.TestCase):
     """Headless functional tests against the real plugin_api.py module,

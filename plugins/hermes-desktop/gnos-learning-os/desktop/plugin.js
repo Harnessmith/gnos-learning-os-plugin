@@ -36,85 +36,87 @@ async function postApi(path, body) {
 }
 
 // Semantic status hues stay fixed regardless of theme (red = attention, green = mastered,
-// amber = in progress, blue = introduced) — everything else routes through var(--ui-*).
+// amber = in progress, blue = introduced); the rest follows the supplied GNOS palette.
 const statusTone = { unknown: 'muted', exposed: 'blue', practicing: 'amber', demonstrated: 'green', retained: 'green', 'repair-needed': 'red', planned: 'muted', corrected: 'amber', in_progress: 'amber', completed: 'green', not_started: 'muted', running: 'amber', ready_to_check: 'amber', passed: 'green', failed: 'red' }
 const toneHex = { muted: null, blue: '#2f6fed', amber: '#c2760c', green: '#1a9c5c', red: '#e5484d' }
 const kindIcon = { lesson: 'book', lab: 'beaker', review: 'history', retrieval: 'question', checkpoint: 'checklist', exam: 'mortar-board', project: 'project', challenge: 'zap', repair: 'tools' }
 const blockIcon = { 'Texto': 'book', 'Vídeo': 'device-camera-video', 'Simulação': 'pulse', 'Código': 'code', 'Diagrama': 'type-hierarchy', 'Exercício': 'checklist', 'Fonte': 'link-external', 'Equação': 'symbol-operator' }
 
 const css = {
-  page: { maxWidth: 1120, margin: '0 auto', padding: '30px 32px 56px', color: 'var(--foreground)' },
-  eyebrowRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 },
-  eyebrowDot: { width: 6, height: 6, borderRadius: 999, background: 'var(--accent)' },
-  eyebrow: { color: 'var(--muted-foreground)', fontSize: 12, letterSpacing: '.09em', textTransform: 'uppercase', fontWeight: 600 },
-  title: { fontSize: 30, letterSpacing: '-.035em', fontWeight: 680, margin: '0 0 10px', lineHeight: 1.15 },
-  subtitle: { color: 'var(--muted-foreground)', margin: '0 0 26px', maxWidth: 720, lineHeight: 1.55, fontSize: 14.5 },
-  grid: { display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' },
+  page: { width: '100%', padding: '0 32px 48px', color: 'var(--foreground)', boxSizing: 'border-box' },
+  eyebrowRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 },
+  eyebrowDot: { display: 'none' },
+  eyebrow: { color: 'var(--muted-foreground)', fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', fontWeight: 650 },
+  title: { fontSize: 28, letterSpacing: '-.035em', fontWeight: 760, margin: 0, lineHeight: 1.12 },
+  subtitle: { color: 'var(--muted-foreground)', margin: '0 0 24px', maxWidth: 760, lineHeight: 1.6, fontSize: 15 },
+  grid: { display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))' },
   card: {
-    border: '1px solid var(--border)', background: 'var(--card)', borderRadius: 14, padding: 18,
-    boxShadow: '0 1px 2px color-mix(in srgb, var(--foreground) 5%, transparent)'
+    border: '1px solid var(--border)', background: 'var(--card)', borderRadius: 18, padding: 22,
+    boxShadow: '0 20px 60px rgba(0,0,0,.25)'
   },
   accentCard: {
-    border: '1px solid color-mix(in srgb, var(--accent) 40%, var(--border))',
-    background: 'linear-gradient(160deg, color-mix(in srgb, var(--accent) 11%, var(--card)), var(--card) 65%)',
-    borderRadius: 16, padding: 24,
-    boxShadow: '0 6px 20px -8px color-mix(in srgb, var(--accent) 35%, transparent)'
+    border: '1px solid color-mix(in srgb, var(--accent) 46%, var(--border))',
+    background: 'radial-gradient(circle at 88% 16%,color-mix(in srgb,var(--accent) 24%,transparent),transparent 32%),linear-gradient(150deg,#17142b,var(--card) 62%)',
+    borderRadius: 18, padding: 28,
+    boxShadow: '0 20px 60px rgba(0,0,0,.3)'
   },
-  cardTitleRow: { display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 12px' },
-  cardTitle: { fontSize: 14.5, fontWeight: 660, letterSpacing: '-.01em' },
+  cardTitleRow: { display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 16px' },
+  cardTitle: { fontSize: 16, fontWeight: 720, letterSpacing: '-.015em', margin: 0 },
   cardIconWrap: {
-    width: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: 'color-mix(in srgb, var(--accent) 14%, transparent)', color: 'var(--accent)', flexShrink: 0
+    width: 30, height: 30, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'var(--accent-2)', flexShrink: 0
   },
   heroIconWrap: {
-    width: 46, height: 46, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: 'color-mix(in srgb, var(--accent) 18%, transparent)', color: 'var(--accent)', flexShrink: 0, fontSize: 20
+    width: 48, height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'color-mix(in srgb, var(--accent) 20%, transparent)', color: 'var(--accent-2)', flexShrink: 0, fontSize: 20
   },
   button: {
-    background: 'var(--accent)', color: 'var(--accent-foreground)', border: 0, borderRadius: 9, padding: '10px 16px',
-    fontWeight: 640, fontSize: 13.5, cursor: 'pointer', letterSpacing: '-.005em'
+    background: 'var(--accent)', color: '#fff', border: 0, borderRadius: 11, padding: '11px 17px',
+    fontWeight: 700, fontSize: 14, cursor: 'pointer', letterSpacing: '-.005em', boxShadow: '0 8px 24px rgba(124,92,255,.22)'
   },
   ghost: {
-    background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', color: 'var(--foreground)',
-    border: '1px solid var(--border)', borderRadius: 9, padding: '9px 15px', cursor: 'pointer', fontSize: 13.5, fontWeight: 540
+    background: 'var(--panel-2)', color: 'var(--foreground)', border: '1px solid var(--border)',
+    borderRadius: 11, padding: '10px 16px', cursor: 'pointer', fontSize: 14, fontWeight: 650
   },
-  divider: { height: 1, background: 'color-mix(in srgb, var(--border) 70%, transparent)', margin: '16px 0' },
-  state: { color: 'var(--muted-foreground)', padding: '56px 0', textAlign: 'center', fontSize: 14 },
-  appShell: { display: 'grid', gridTemplateColumns: '244px minmax(0, 1fr)', minHeight: '100%', width: '100%' },
+  divider: { height: 1, background: 'var(--border)', margin: '18px 0' },
+  state: { color: 'var(--muted-foreground)', padding: '64px 0', textAlign: 'center', fontSize: 15 },
+  appShell: { display: 'grid', gridTemplateColumns: '248px minmax(0, 1fr)', minHeight: '100vh', width: '100%', background: 'var(--background)', color: 'var(--foreground)', fontFamily: 'Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' },
   appNav: {
-    position: 'sticky', top: 0, alignSelf: 'start', height: '100vh', padding: '22px 14px',
-    borderRight: '1px solid var(--border)', background: 'color-mix(in srgb, var(--card) 76%, transparent)',
-    display: 'flex', flexDirection: 'column', gap: 18, boxSizing: 'border-box'
+    position: 'sticky', top: 0, alignSelf: 'start', height: '100vh', padding: '22px 16px',
+    borderRight: '1px solid var(--border)', background: '#0d1015',
+    display: 'flex', flexDirection: 'column', gap: 24, boxSizing: 'border-box'
   },
-  brand: { display: 'flex', alignItems: 'center', gap: 11, padding: '2px 8px 20px' },
+  brand: { display: 'flex', alignItems: 'center', gap: 12, padding: '0 6px' },
   brandMark: {
-    width: 36, height: 36, display: 'grid', placeItems: 'center', borderRadius: 11,
-    background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 64%, var(--card)))',
-    color: 'var(--accent-foreground)', fontWeight: 800, boxShadow: '0 8px 22px -10px var(--accent)'
+    width: 38, height: 38, display: 'grid', placeItems: 'center', borderRadius: 12,
+    background: 'linear-gradient(135deg,var(--accent),#4a31ca)', color: '#fff', fontWeight: 850,
+    boxShadow: '0 12px 30px rgba(124,92,255,.24)'
   },
-  navList: { display: 'grid', gap: 4 },
+  navList: { display: 'grid', gap: 6 },
   navItem: {
-    width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 11px', borderRadius: 9,
-    border: '1px solid transparent', background: 'transparent', color: 'var(--muted-foreground)',
-    cursor: 'pointer', fontSize: 13, fontWeight: 560, textAlign: 'left'
+    width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 12,
+    border: 0, background: 'transparent', color: 'var(--muted-foreground)', cursor: 'pointer',
+    fontSize: 14, fontWeight: 650, textAlign: 'left'
   },
-  navItemActive: {
-    color: 'var(--foreground)', border: '1px solid color-mix(in srgb, var(--accent) 26%, var(--border))',
-    background: 'color-mix(in srgb, var(--accent) 11%, var(--card))',
-    boxShadow: 'inset 3px 0 0 var(--accent)'
-  },
-  appContent: { minWidth: 0 },
-  profile: { marginTop: 'auto', border: '1px solid var(--border)', background: 'var(--card)', borderRadius: 14, padding: 13 },
-  topbar: { minHeight: 94, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, borderBottom: '1px solid var(--border)', marginBottom: 28 },
-  metric: { fontSize: 29, fontWeight: 720, letterSpacing: '-.035em', display: 'block', margin: '5px 0' }
+  navItemActive: { color: '#fff', background: '#171b23', boxShadow: 'inset 3px 0 0 var(--accent)' },
+  appContent: { minWidth: 0, background: 'var(--background)' },
+  profile: { marginTop: 'auto', border: '1px solid var(--border)', background: 'var(--card)', borderRadius: 14, padding: 14 },
+  topbar: { height: 96, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, borderBottom: '1px solid var(--border)', marginBottom: 28 },
+  metric: { fontSize: 36, fontWeight: 800, letterSpacing: '-.045em', display: 'block', margin: '8px 0' }
 }
 
 const responsiveCss = `
-.gnos-action:focus-visible,.gnos-nav:focus-visible,.gnos-select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gnos-shell{--background:#090b0f;--card:#11141a;--panel-2:#151922;--border:#222834;--foreground:#f4f6f8;--muted-foreground:#8f98a8;--accent:#7c5cff;--accent-2:#a48fff;--accent-foreground:#fff;--good:#43d17b;--warn:#f6b94b;--bad:#ff6474;--font-mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;color-scheme:dark}
+.gnos-shell,.gnos-shell *{box-sizing:border-box}.gnos-shell button,.gnos-shell input,.gnos-shell textarea,.gnos-shell select{font:inherit}
+.gnos-action,.gnos-nav{transition:transform .16s ease,background .16s ease,border-color .16s ease,filter .16s ease}
+.gnos-action:focus-visible,.gnos-nav:focus-visible,.gnos-select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .gnos-action:disabled{opacity:.5;cursor:not-allowed}
-.gnos-action:hover:not(:disabled),.gnos-nav:hover{filter:brightness(1.08)}
-@media(max-width:820px){.gnos-shell{grid-template-columns:1fr!important}.gnos-sidebar{position:relative!important;height:auto!important;border-right:0!important;border-bottom:1px solid var(--border)!important}.gnos-nav-list{grid-template-columns:repeat(3,minmax(0,1fr))!important}.gnos-profile{display:none}.gnos-page{padding:0 18px 42px!important}.gnos-two-col{grid-template-columns:1fr!important}}
-@media(max-width:520px){.gnos-nav-list{grid-template-columns:repeat(2,minmax(0,1fr))!important}.gnos-topbar{align-items:flex-start!important;padding:18px 0}.gnos-actions{width:100%;flex-direction:column}.gnos-actions>*{width:100%}}
+.gnos-action:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.1)}
+.gnos-nav:hover{background:#171b23;color:#fff}
+.gnos-card{transition:border-color .18s ease,transform .18s ease}.gnos-card:hover{border-color:#30384a}
+@media(max-width:920px){.gnos-shell{grid-template-columns:210px minmax(0,1fr)!important}.gnos-page{padding:0 22px 42px!important}}
+@media(max-width:760px){.gnos-shell{grid-template-columns:1fr!important}.gnos-sidebar{position:relative!important;height:auto!important;border-right:0!important;border-bottom:1px solid var(--border)!important}.gnos-nav-list{grid-template-columns:repeat(3,minmax(0,1fr))!important}.gnos-profile{display:none}.gnos-page{padding:0 18px 42px!important}.gnos-two-col{grid-template-columns:1fr!important}}
+@media(max-width:520px){.gnos-nav-list{grid-template-columns:repeat(2,minmax(0,1fr))!important}.gnos-topbar{height:auto!important;min-height:92px;align-items:flex-start!important;padding:18px 0;flex-direction:column}.gnos-actions{width:100%;flex-direction:column}.gnos-actions>*{width:100%}}
 `
 
 function GnosShell({ active, Component }) {
@@ -134,8 +136,8 @@ function GnosShell({ active, Component }) {
               jsx('span', { style: css.brandMark, children: 'G' }),
               jsxs('span', {
                 children: [
-                  jsx('strong', { style: { display: 'block', fontSize: 14, letterSpacing: '.02em' }, children: 'GNOS' }),
-                  jsx('small', { style: { display: 'block', marginTop: 2, color: 'var(--muted-foreground)', fontSize: 11.5 }, children: 'Learning OS' })
+                  jsx('strong', { style: { display: 'block', fontSize: 16, letterSpacing: '.01em' }, children: 'GNOS' }),
+                  jsx('small', { style: { display: 'block', marginTop: 3, color: 'var(--muted-foreground)', fontSize: 12 }, children: 'Learning OS' })
                 ]
               })
             ]
@@ -178,17 +180,18 @@ function Page({ label, title, subtitle, actions, children }) {
       jsxs('header', { className: 'gnos-topbar', style: css.topbar, children: [
         jsxs('div', { children: [
           jsxs('div', { style: css.eyebrowRow, children: [jsx('span', { style: css.eyebrowDot }), jsx('span', { style: css.eyebrow, children: label })] }),
-          jsx('h1', { style: css.title, children: title }),
-          subtitle && jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: subtitle })
+          jsx('h1', { style: css.title, children: title })
         ] }),
         actions && jsx('div', { className: 'gnos-actions', style: { display: 'flex', gap: 8, flexWrap: 'wrap' }, children: actions })
       ] }),
+      subtitle && jsx('p', { style: css.subtitle, children: subtitle }),
       children
     ]
   })
 }
 function Card({ title, icon, children, accent = false }) {
   return jsxs('section', {
+    className: 'gnos-card',
     style: accent ? css.accentCard : css.card, children: [
       title && jsxs('div', {
         style: css.cardTitleRow, children: [
@@ -262,15 +265,17 @@ function Today() {
       : null
   return jsx(Page, {
     label: data?.date || 'Hoje', title: 'Hoje', actions,
-    subtitle: 'Sua sessão atual, as próximas intervenções e o estado real das competências.',
     children: isLoading ? jsx(Loading, { label: 'hoje' }) : error ? jsx(ErrorState, { label: 'hoje', error }) : !data?.session ? jsx(Empty, { label: 'hoje' }) : jsxs('div', {
       style: { display: 'grid', gap: 16 }, children: [
         jsxs('section', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) minmax(260px,.8fr)', gap: 16 }, children: [
-          jsx(Card, { accent: true, children: jsxs('div', { style: { display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, alignItems: 'center' }, children: [
-            jsxs('div', { children: [jsx(Badge, { state: data.status, children: data.track || data.status }), jsx('h2', { style: { margin: '14px 0 8px', fontSize: 26, letterSpacing: '-.03em' }, children: data.session }), jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: data.objective }), jsxs('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', color: 'var(--muted-foreground)', fontSize: 13, marginTop: 15 }, children: [jsx('span', { children: `${data.duration || '—'} min planejados` }), jsx('span', { children: `${labsData?.labs?.length || 0} laboratório(s)` })] }), jsxs('div', { className: 'gnos-actions', style: { display: 'flex', gap: 8, marginTop: 18 }, children: [jsx(Navigate, { path: `${BASE}/lesson`, primary: true, icon: 'arrow-right', children: 'Continuar aula' }), jsx(Navigate, { path: `${BASE}/timeline`, icon: 'calendar', children: 'Ver cronograma' })] })] }),
-            jsx('div', { style: { width: 92, height: 92, borderRadius: '50%', padding: 7, display: 'grid', placeItems: 'center', background: `conic-gradient(var(--accent) ${percent}%, color-mix(in srgb, var(--border) 70%, transparent) 0)` }, children: jsxs('div', { style: { width: '100%', height: '100%', borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'var(--card)' }, children: [jsx('strong', { style: { fontSize: 20 }, children: `${percent}%` }), jsx('small', { style: { color: 'var(--muted-foreground)', marginTop: -22 }, children: 'evidência' })] }) })
+          jsx(Card, { accent: true, children: jsxs('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 28, alignItems: 'center', minHeight: 210 }, children: [
+            jsxs('div', { children: [jsx(Badge, { state: data.status, children: data.track || data.status }), jsx('h2', { style: { margin: '18px 0 10px', fontSize: 34, fontWeight: 780, letterSpacing: '-.045em' }, children: data.session }), jsx('p', { style: { ...css.subtitle, marginBottom: 0, color: 'var(--foreground)', opacity: .82 }, children: data.objective }), jsxs('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', color: 'var(--muted-foreground)', fontSize: 14, marginTop: 18 }, children: [jsxs('span', { children: ['◷ ', `${data.duration || '—'} min`] }), jsxs('span', { children: ['◉ ', data.track || 'Trilha atual'] }), jsxs('span', { children: ['⚙ ', `${labsData?.labs?.length || 0} laboratório(s)`] })] }), jsxs('div', { className: 'gnos-actions', style: { display: 'flex', gap: 10, marginTop: 22 }, children: [jsx(Navigate, { path: `${BASE}/lesson`, primary: true, icon: 'arrow-right', children: 'Continuar aula' }), jsx(Navigate, { path: `${BASE}/timeline`, icon: 'calendar', children: 'Ver cronograma' })] })] }),
+            jsx('div', { style: { width: 112, height: 112, borderRadius: '50%', padding: 8, display: 'grid', placeItems: 'center', background: `conic-gradient(var(--accent) ${percent}%, #282d38 0)`, boxShadow: '0 0 34px rgba(124,92,255,.16)' }, children: jsxs('div', { style: { width: '100%', height: '100%', borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'var(--card)' }, children: [jsx('strong', { style: { fontSize: 25, alignSelf: 'end', marginBottom: 2 }, children: `${percent}%` }), jsx('small', { style: { color: 'var(--muted-foreground)', alignSelf: 'start', marginTop: 2 }, children: 'trilha' })] }) })
           ] }) }),
-          jsx(Card, { title: 'Próximo passo', icon: 'arrow-swap', children: jsxs('div', { children: [jsx('p', { style: { margin: '0 0 16px', lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: data.next || 'Aguardando próxima intervenção' }), jsx(Navigate, { path: `${BASE}/progress`, icon: 'graph', children: 'Mapa de competências' })] }) })
+          jsx(Card, { title: 'Foco de hoje', icon: 'target', children: jsxs('div', { children: [
+            ...(timeline.slice(0, 4).map((row, index) => jsxs('div', { style: { display: 'grid', gridTemplateColumns: '34px minmax(0,1fr)', gap: 12, padding: '12px 0', borderBottom: index < Math.min(timeline.length, 4) - 1 ? '1px solid var(--border)' : 0 }, children: [jsx('span', { style: { color: 'var(--accent-2)', fontFamily: 'var(--font-mono)', fontWeight: 760, fontSize: 13 }, children: String(index + 1).padStart(2, '0') }), jsxs('div', { children: [jsx('b', { style: { display: 'block', fontSize: 14 }, children: row.text }), jsx('small', { style: { display: 'block', color: 'var(--muted-foreground)', marginTop: 4 }, children: row.adaptive_reason || row.kind })] })] }, row.id))),
+            !timeline.length && jsxs('div', { children: [jsx('p', { style: { margin: '0 0 16px', lineHeight: 1.6, color: 'var(--muted-foreground)' }, children: data.next || 'Aguardando próxima intervenção' }), jsx(Navigate, { path: `${BASE}/progress`, icon: 'graph', children: 'Mapa de competências' })] })
+          ] }) })
         ] }),
         jsxs('section', { style: css.grid, children: [
           jsx(Card, { title: 'Competências registradas', icon: 'symbol-class', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: evidence.length }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: 'nós com evidência' })] }) }),
