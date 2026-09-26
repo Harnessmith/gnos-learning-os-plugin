@@ -1,18 +1,21 @@
-"""GNOS Learning OS - plugin backend.
+"""Didaktos Learning OS - plugin backend.
 
 Mounted at ``/api/plugins/gnos-learning-os/`` inside the Hermes gateway
 process (see ``dashboard/manifest.json``). This is the ONLY door the desktop
 plugin UI is allowed to use for pedagogical data - the renderer never reads
-GNOS course files, learner state, or executes anything directly (see
+Didaktos course files, learner state, or executes anything directly (see
 ``../contracts.md``).
 
 Storage: PostgreSQL, schema ``gnos_learning_os`` inside the local ``memory``
 database already running on this host (see ``_connect()``). This is a local,
-plugin-owned persistence layer - NOT the GNOS profile's own learner state
-(``skills/learner-tracking/scripts/learner_state.py``). A later integration
-phase (profile <-> plugin) will decide how/if these get reconciled; until
-then this schema is seeded with a deterministic fixture so the UI has real,
-persisted data instead of a renderer-side mock object.
+plugin-owned persistence layer - NOT the Didaktos profile's own learner state
+(``skills/learner-tracking/scripts/learner_state.py`` for lesson history, or
+``skills/review-engine/scripts/write_evidence.py`` for per-competency
+evidence). Phase 4 (see ``sync_evidence.py`` beside this file) bridges the
+profile's evidence files into this schema's ``evidence`` table one domain at
+a time, run explicitly after a teaching session - it is NOT a live
+subscription. Tracks/sessions/timeline/labs/resources/projects remain
+fixture-seeded until a later phase extends the bridge to them.
 
 Design invariants (see docs/gnos-learning-os/02_PLUGIN_BACKEND_AND_CONTRACTS.md):
   - planned vs actual timelines are DISTINCT and APPEND-ONLY: a reschedule or
@@ -68,12 +71,12 @@ def _conninfo() -> str:
     logged) via the standard libpq `passfile` mechanism. Host/user/db/schema
     are overridable via env vars for a future non-dev deployment.
     """
-    host = os.environ.get("GNOS_PG_HOST", "localhost")
-    port = os.environ.get("GNOS_PG_PORT", "5432")
-    user = os.environ.get("GNOS_PG_USER", "memory")
-    dbname = os.environ.get("GNOS_PG_DATABASE", "memory")
+    host = os.environ.get("DIDAKTOS_PG_HOST", "localhost")
+    port = os.environ.get("DIDAKTOS_PG_PORT", "5432")
+    user = os.environ.get("DIDAKTOS_PG_USER", "memory")
+    dbname = os.environ.get("DIDAKTOS_PG_DATABASE", "memory")
     passfile = os.environ.get("PGPASSFILE", os.path.expanduser("~/.pgpass"))
-    schema = os.environ.get("GNOS_PG_SCHEMA", SCHEMA)
+    schema = os.environ.get("DIDAKTOS_PG_SCHEMA", SCHEMA)
     return (
         f"postgresql://{user}@{host}:{port}/{dbname}"
         f"?options=-c%20search_path%3D{schema}&passfile={passfile}"
@@ -288,7 +291,7 @@ def _seed_if_empty(conn: psycopg.Connection) -> None:
                 json.dumps(["Diagnosticar por que um container nao encontra outro pelo nome do servico."]),
                 json.dumps(["leitura", "diagrama", "codigo", "exercicio"]),
                 "Diagnosticar por que um container nao encontra outro pelo nome do servico.",
-                "Professor GNOS - contexto da sessao preservado",
+                "Professor Didaktos - contexto da sessao preservado",
                 json.dumps(
                     [
                         ["Texto", "Containers compartilham o host, mas nao compartilham automaticamente a mesma rede de aplicacao."],
