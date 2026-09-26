@@ -61,6 +61,32 @@ class GnosDesktopPluginRendererTests(unittest.TestCase):
         self.assertIn("ctx.rest(path, opts)", self.source)
         self.assertIn("function rest(path, opts)", self.source)
 
+    def test_internal_app_is_functional_not_a_static_shell(self):
+        for marker in (
+            "className: 'gnos-shell'",
+            "className: 'gnos-profile'",
+            "const responsiveCss",
+            "function evidencePercent",
+            "useState",
+        ):
+            self.assertIn(marker, self.source)
+        for endpoint in (
+            "/sessions/${data.session_id}/start",
+            "/sessions/${sessionId}/complete",
+            "useApi('/labs'",
+            "/labs/${labId}/${kind}",
+            "/assessments/${assessment.id}/submit",
+        ):
+            self.assertIn(endpoint, self.source)
+        for forbidden in (
+            "window.location.reload",
+            "alert(",
+            "React.useState",
+            "const LAB_ID",
+            "placeholder)",
+        ):
+            self.assertNotIn(forbidden, self.source)
+
 
 class GnosPluginBackendTests(unittest.TestCase):
     """Headless functional tests against the real plugin_api.py module,
@@ -126,6 +152,8 @@ class GnosPluginBackendTests(unittest.TestCase):
 
     def test_lab_lifecycle_start_check_reset_never_deletes_check_history(self):
         lab_id = "lab-dns-entre-containers"
+        labs = self._run(self.api.list_labs())["labs"]
+        self.assertIn(lab_id, [lab["id"] for lab in labs])
         self._run(self.api.start_lab(lab_id))
         checked = self._run(self.api.check_lab(lab_id))
         self.assertEqual(checked["status"], "failed")  # seeded lab is not yet fixed

@@ -589,6 +589,16 @@ async def list_projects():
     return {"projects": [dict(r) for r in rows]}
 
 
+@router.get("/labs")
+async def list_labs():
+    """List available labs so the renderer never depends on a fixture id."""
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM {SCHEMA}.labs ORDER BY created_at ASC")
+        rows = cur.fetchall()
+    return {"labs": [_lab_dict(r) for r in rows]}
+
+
 @router.get("/labs/{lab_id}")
 async def get_lab(lab_id: str):
     _ensure_seeded()
