@@ -389,6 +389,27 @@ def sync_lesson_session(workspace_root: Path, learner: str, course_id: str,
                     (assessment_id, session_id, exercise.get("prompt") or exercise_id,
                      exercise.get("response_type") or "exercise", result, now, now),
                 )
+
+            # The progress map records only facts available at publication:
+            # these competencies are planned by this course and have zero
+            # learner attempts. It never claims mastery before an observation.
+            for depth, competency_id in enumerate(lesson.get("concepts", [])):
+                evidence_id = f"evidence-course-{course_id}-{competency_id}"
+                cur.execute(
+                    f"""
+                    INSERT INTO {plugin_api.SCHEMA}.evidence
+                        (id, competency_id, label, status, attempts, detail,
+                         misconceptions_json, next_intervention, depth, updated_at)
+                    VALUES (%s, %s, %s, 'unknown', 0, %s, '[]', %s, %s, %s)
+                    ON CONFLICT (competency_id) DO UPDATE SET
+                        label = EXCLUDED.label, detail = EXCLUDED.detail,
+                        next_intervention = EXCLUDED.next_intervention,
+                        depth = EXCLUDED.depth, updated_at = EXCLUDED.updated_at
+                    """,
+                    (evidence_id, f"course:{course_id}:{competency_id}", competency_id,
+                     f"Competência planejada em {course.get('title', course_id)}; sem tentativa registrada.",
+                     f"Concluir a atividade de {lesson['title']}.", depth, now),
+                )
             entry_id = f"timeline-{session_id}"
             cur.execute(
                 f"""

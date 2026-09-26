@@ -584,7 +584,10 @@ async def list_evidence():
     """Also serves as the 'progress' tree the dashboard renders as a drill-down."""
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.evidence ORDER BY depth ASC, updated_at ASC")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.evidence WHERE id LIKE 'evidence-course-%' "
+            "ORDER BY depth ASC, updated_at ASC"
+        )
         rows = cur.fetchall()
     return {"evidence": [_evidence_dict(r) for r in rows]}
 
