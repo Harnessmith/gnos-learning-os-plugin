@@ -258,13 +258,18 @@ function Projects() {
 const pages = [
   ['today', 'Hoje', 'home', Today], ['tracks', 'Trilhas', 'library', Tracks], ['timeline', 'Cronograma', 'calendar', Timeline], ['lesson', 'Aula', 'book', Lesson], ['lab', 'Laboratórios', 'beaker', Lab], ['assessments', 'Avaliações', 'checklist', Assessments], ['progress', 'Progresso', 'graph', Progress], ['resources', 'Recursos', 'references', Resources], ['projects', 'Projetos', 'project', Projects]
 ]
-export default function activate(ctx) {
-  restImpl = (path, opts) => ctx.rest(path, opts)
-  ctx.registerMany([
-    ...pages.flatMap(([path, label, codicon, Component]) => [
-      { id: `gnos.route.${path}`, area: ROUTES_AREA, data: { path: `${BASE}/${path}` }, render: () => jsx(Component, {}) },
-      { id: `gnos.nav.${path}`, area: SIDEBAR_NAV_AREA, data: { path: `${BASE}/${path}`, label, codicon } }
-    ]),
-    { id: 'gnos.palette.open', area: PALETTE_AREA, data: { id: 'gnos.open', label: 'Abrir GNOS Learning OS', keywords: ['gnos', 'learning', 'study'], run: () => host.navigate(`${BASE}/today`) } }
-  ])
+export default {
+  id: 'gnos-learning-os',
+  name: 'GNOS Learning OS',
+  description: 'GNOS Learning Dashboard — interface V1 para a jornada de estudos.',
+  register(ctx) {
+    restImpl = (path, opts) => ctx.rest(path, opts)
+    ctx.registerMany([
+      ...pages.flatMap(([path, label, codicon, Component]) => [
+        { id: `gnos.route.${path}`, area: ROUTES_AREA, data: { path: `${BASE}/${path}` }, render: () => jsx(Component, {}) },
+        { id: `gnos.nav.${path}`, area: SIDEBAR_NAV_AREA, data: { path: `${BASE}/${path}`, label, codicon } }
+      ]),
+      { id: 'gnos.palette.open', area: PALETTE_AREA, data: { id: 'gnos.open', label: 'Abrir GNOS Learning OS', keywords: ['gnos', 'learning', 'study'], run: () => host.navigate(`${BASE}/today`) } }
+    ])
+  }
 }
