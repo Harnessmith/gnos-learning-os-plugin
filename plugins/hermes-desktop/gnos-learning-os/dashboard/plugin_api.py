@@ -82,6 +82,43 @@ WORKSPACE_ROOT = Path(
 ).resolve()
 
 
+def _inline_portal_assets(html: str, portal_dir: Path) -> str:
+    """Inline local CSS/JS so the HTML remains self-contained in a data: iframe.
+
+    The Desktop reader intentionally transports portal HTML as a data URL. A
+    relative ``assets/...`` URL has no base directory in that context, so
+    KaTeX/highlight silently fail to load. Only known, renderer-owned assets
+    are inlined; external URLs and unknown paths remain untouched.
+    """
+    replacements = {
+        'assets/katex/katex.min.css': ("style", "katex/katex.min.css"),
+        'assets/highlight/github-dark.min.css': ("style", "highlight/github-dark.min.css"),
+        'assets/katex/katex.min.js': ("script", "katex/katex.min.js"),
+        'assets/katex/auto-render.min.js': ("script", "katex/auto-render.min.js"),
+        'assets/highlight/highlight.min.js': ("script", "highlight/highlight.min.js"),
+    }
+    for asset_url, (kind, relative_path) in replacements.items():
+        asset_path = (portal_dir / "assets" / relative_path).resolve()
+        if not asset_path.is_file():
+            log.warning("portal asset missing: %s", asset_path)
+            continue
+        try:
+            asset = asset_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if kind == "style":
+            html = html.replace(
+                f'<link rel="stylesheet" href="{asset_url}">',
+                f'<style data-inlined-asset="{asset_url}">{asset}</style>',
+            )
+        else:
+            html = html.replace(
+                f'<script defer src="{asset_url}"></script>',
+                f'<script data-inlined-asset="{asset_url}">{asset}</script>',
+            )
+    return html
+
+
 def _read_portal_html(portal_path: Optional[str]) -> str:
     """Resolve and read a portal `index.html`, refusing anything outside
     WORKSPACE_ROOT/learners/.../portal/ (defence in depth: portal_path is
@@ -100,9 +137,10 @@ def _read_portal_html(portal_path: Optional[str]) -> str:
     if resolved.name != "index.html" or not resolved.is_file():
         raise HTTPException(status_code=404, detail="portal not found")
     try:
-        return resolved.read_text(encoding="utf-8")
+        html = resolved.read_text(encoding="utf-8")
     except OSError as exc:
         raise HTTPException(status_code=404, detail="portal not found") from exc
+    return _inline_portal_assets(html, resolved.parent)
 
 
 def _conninfo() -> str:
