@@ -298,7 +298,7 @@ function Progress() {
   return jsx(ProgressPage, { useApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css, evidencePercent, ListRow })
 }
 function Metrics() {
-  return jsx(MetricsPage, { useApi, Page, Loading, ErrorState, Empty, Card, css })
+  return jsx(MetricsPage, { useApi, Page, Loading, ErrorState, Empty, Card, Badge, css })
 }
 function Resources() {
   return jsx(ResourcesPage, { useApi, mutateApi, host, BASE, Page, Loading, ErrorState, Empty, Card, ListRow, Badge, css, artifactIcon })

@@ -1,6 +1,6 @@
 import { jsx, jsxs } from 'react/jsx-runtime'
 
-export function MetricsPage({ useApi, Page, Loading, ErrorState, Empty, Card, css }) {
+export function MetricsPage({ useApi, Page, Loading, ErrorState, Empty, Card, Badge, css }) {
   const { data, isLoading, error } = useApi('/metrics', ['metrics'])
   const totals = data?.totals || {}
   const byTrack = data?.by_track || []
