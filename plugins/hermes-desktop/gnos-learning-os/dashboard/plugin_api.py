@@ -1406,6 +1406,21 @@ _VALID_OUTCOMES = {
 }
 
 
+@router.get("/assessments/{assessment_id}/history")
+async def assessment_history(assessment_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT id FROM {SCHEMA}.assessments WHERE id = %s", (assessment_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="assessment not found")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.attempts WHERE assessment_id = %s ORDER BY created_at ASC",
+            (assessment_id,),
+        )
+        attempts = [dict(row) for row in cur.fetchall()]
+    return {"assessment_id": assessment_id, "attempts": attempts, "total": len(attempts)}
+
+
 @router.post("/assessments/{assessment_id}/submit")
 async def submit_assessment(assessment_id: str, body: AssessmentSubmitBody):
     if body.outcome not in _VALID_OUTCOMES:
