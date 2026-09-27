@@ -102,6 +102,13 @@ class PluginIntegrityTests(unittest.TestCase):
             asyncio.run(plugin_api.complete_session("session-planned-only", plugin_api.SessionCompleteBody()))
         self.assertEqual(ctx.exception.status_code, 409)
 
+    def test_session_notes_are_persisted_and_listed(self):
+        note = asyncio.run(plugin_api.create_session_note("session-devops-active", plugin_api.SessionNoteBody(text="Revisar DNS")))
+        self.assertEqual(note["note"]["text"], "Revisar DNS")
+        result = asyncio.run(plugin_api.list_session_notes("session-devops-active"))
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["notes"][0]["text"], "Revisar DNS")
+
 
 if __name__ == "__main__":
     unittest.main()

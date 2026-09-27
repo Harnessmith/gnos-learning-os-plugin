@@ -220,6 +220,13 @@ ALTER TABLE {SCHEMA}.sessions ADD COLUMN IF NOT EXISTS portal_path TEXT;
 
 -- Append-only. A reschedule/repair NEVER updates an existing row; it only
 -- inserts a new one. `source` distinguishes the two chronologies.
+CREATE TABLE IF NOT EXISTS {SCHEMA}.session_notes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES {SCHEMA}.sessions(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS {SCHEMA}.timeline_entries (
     id TEXT PRIMARY KEY,
     session_id TEXT REFERENCES {SCHEMA}.sessions(id) ON DELETE SET NULL,
@@ -1154,6 +1161,44 @@ class SessionUpdateBody(BaseModel):
     planned_date: Optional[str] = Field(default=None, max_length=30)
     planned_topic: Optional[str] = Field(default=None, max_length=300)
     planned_duration: Optional[int] = Field(default=None, ge=1, le=1440)
+
+
+class SessionNoteBody(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+
+
+@router.get("/sessions/{session_id}/notes")
+async def list_session_notes(session_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT id FROM {SCHEMA}.sessions WHERE id = %s", (session_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.session_notes WHERE session_id = %s ORDER BY created_at ASC",
+            (session_id,),
+        )
+        notes = [dict(row) for row in cur.fetchall()]
+    return {"session_id": session_id, "notes": notes, "total": len(notes)}
+
+
+@router.post("/sessions/{session_id}/notes")
+async def create_session_note(session_id: str, body: SessionNoteBody):
+    _ensure_seeded()
+    now = _now()
+    note_id = f"note-{uuid.uuid4().hex}"
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT id FROM {SCHEMA}.sessions WHERE id = %s", (session_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        cur.execute(
+            f"INSERT INTO {SCHEMA}.session_notes (id, session_id, text, created_at) "
+            "VALUES (%s, %s, %s, %s) RETURNING *",
+            (note_id, session_id, body.text.strip(), now),
+        )
+        note = dict(cur.fetchone())
+        conn.commit()
+    return {"note": note}
 
 
 @router.post("/tracks")

@@ -341,6 +341,8 @@ function Today() {
   const { data: timelineData } = useApi('/timeline', ['timeline'])
   const { data: labsData } = useApi('/labs', ['labs'])
   const { data: nextStudyData } = useApi('/study/next', ['study-next'])
+  const { data: notesData } = useApi(data?.session_id ? `/sessions/${data.session_id}/notes` : null, ['session-notes', data?.session_id], { enabled: Boolean(data?.session_id) })
+  const [noteText, setNoteText] = useState('')
   const [busy, setBusy] = useState(false)
   const evidence = evidenceData?.evidence || []
   const timeline = timelineData?.actual?.length ? timelineData.actual : (timelineData?.planned || [])
@@ -352,6 +354,11 @@ function Today() {
       if (kind === 'complete') await postApi(`/sessions/${data.session_id}/complete`, { actual_topic: data.session, actual_duration: data.duration, next_step: data.next })
       host.toast?.(kind === 'start' ? 'Sessão iniciada.' : 'Sessão concluída.', 'success')
     } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
+  }
+  const saveNote = async () => {
+    if (!noteText.trim() || !data?.session_id) return
+    setBusy(true)
+    try { await postApi(`/sessions/${data.session_id}/notes`, { text: noteText.trim() }); setNoteText(''); host.toast?.('Anotação salva.', 'success') } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
   }
   const actions = data?.status === 'planned'
     ? jsx(Navigate, { primary: true, icon: 'play', onClick: () => sessionAction('start'), children: busy ? 'Iniciando…' : 'Iniciar sessão' })
@@ -381,6 +388,11 @@ function Today() {
           jsx(Card, { title: 'Demonstradas ou retidas', icon: 'verified', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: evidence.filter((item) => ['demonstrated', 'retained'].includes(item.status)).length }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: 'competências consolidadas' })] }) }),
           jsx(Card, { title: 'Laboratórios', icon: 'beaker', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: labsData?.labs?.length || 0 }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: 'ambientes disponíveis' })] }) })
         ] }),
+        jsx(Card, { title: 'Anotações da sessão', icon: 'file-text', children: jsxs('div', { style: { display: 'grid', gap: 10 }, children: [
+          ...(notesData?.notes || []).slice(-4).map((note) => jsx('div', { style: { borderBottom: '1px solid var(--border)', paddingBottom: 8, fontSize: 13, lineHeight: 1.5 }, children: note.text }, note.id)),
+          jsx('textarea', { className: 'gnos-select', rows: 2, value: noteText, placeholder: 'Registrar uma observação...', onChange: (event) => setNoteText(event.target.value) }),
+          jsx(Navigate, { primary: true, onClick: saveNote, children: busy ? 'Salvando…' : 'Salvar anotação' })
+        ] }) }),
         jsx(Card, { title: 'Agenda adaptativa', icon: 'calendar', children: timeline.slice(0, 4).map((row) => jsx(ListRow, { icon: kindIcon[row.kind], title: `${row.entry_date} · ${row.text}`, detail: row.adaptive_reason || row.kind, action: jsx(Badge, { state: row.kind === 'repair' ? 'repair-needed' : 'planned', children: row.kind }) }, row.id)) })
       ]
     })
