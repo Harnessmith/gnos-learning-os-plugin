@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -48,6 +49,10 @@ import psycopg
 from psycopg.rows import dict_row
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+# The gateway loads plugin_api.py as a standalone module; make the sibling
+# dashboard/services package importable in that loader mode.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from services.recommendations import choose_next
 
 log = logging.getLogger("gnos_learning_os")
