@@ -6,8 +6,8 @@
 // plugin's own backend at /api/plugins/gnos-learning-os/* (see ../dashboard/plugin_api.py)
 // via ctx.rest. No page reads GNOS course files, learner state, or executes shell —
 // see ../contracts.md for the full contract.
-import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClient, Dialog, DialogContent, DialogHeader, DialogTitle } from '@hermes/plugin-sdk'
-import { useState } from 'react'
+import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClient } from '@hermes/plugin-sdk'
+import { useState, useEffect } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const BASE = '/gnos'
@@ -27,17 +27,39 @@ function rest(path, opts) {
 // only exports the shared UI kit, never a frame primitive) with a tight
 // `sandbox` allow-list so the embedded HTML can run its own scripts/styles
 // without reaching the host app.
+//
+// Renders its own fixed-position overlay instead of the SDK's Dialog/
+// DialogContent: the host's Dialog primitive ships its own max-width
+// (a shadcn-style `sm:max-w-lg`) that wins over an inline `style` override,
+// so the portal rendered squeezed into a small corner box regardless of the
+// width/height we passed it. A hand-rolled overlay gives us full control
+// of size and gets us out from under that fixed max-width.
 function PortalDialog({ open, onOpenChange, title, kind, ids }) {
   const { data, isLoading, error } = useApi(open ? (kind === 'session' ? `/sessions/${ids.sessionId}/portal` : `/courses/${ids.courseId}/lessons/${ids.lessonId}/portal`) : null, ['portal', kind, ids.sessionId || `${ids.courseId}/${ids.lessonId}`])
   const html = data && typeof data === 'object' && 'html' in data ? data.html : (typeof data === 'string' ? data : null)
   const dataUrl = html ? `data:text/html;base64,${btoa(unescape(encodeURIComponent(html)))}` : null
-  return jsx(Dialog, {
-    open, onOpenChange,
-    children: jsxs(DialogContent, {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e) => { if (e.key === 'Escape') onOpenChange(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onOpenChange])
+  if (!open) return null
+  return jsx('div', {
+    className: 'gnos-portal-overlay',
+    style: { position: 'fixed', inset: 0, zIndex: 2147483000, background: 'rgba(6,8,12,.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4vh 4vw' },
+    onClick: (e) => { if (e.target === e.currentTarget) onOpenChange(false) },
+    children: jsxs('div', {
       className: 'gnos-portal-dialog',
-      style: { width: '90vw', maxWidth: 1100, height: '86vh', padding: 0, display: 'flex', flexDirection: 'column' },
+      style: { width: '92vw', maxWidth: 1200, height: '92vh', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 16, padding: 0, display: 'flex', flexDirection: 'column', boxShadow: '0 30px 90px rgba(0,0,0,.5)' },
       children: [
-        jsx(DialogHeader, { style: { padding: '16px 20px 0' }, children: jsx(DialogTitle, { children: title || 'Aula completa' }) }),
+        jsxs('div', {
+          style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)' },
+          children: [
+            jsx('strong', { style: { fontSize: 16 }, children: title || 'Aula completa' }),
+            jsx('button', { type: 'button', className: 'gnos-action', onClick: () => onOpenChange(false), 'aria-label': 'Fechar', style: { border: '1px solid var(--border)', background: 'transparent', color: 'var(--foreground)', borderRadius: 8, width: 32, height: 32, cursor: 'pointer', fontSize: 16 }, children: '\u2715' })
+          ]
+        }),
         jsx('div', {
           style: { flex: 1, minHeight: 0, padding: '12px 20px 20px' },
           children: isLoading
