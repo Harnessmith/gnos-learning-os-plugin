@@ -296,6 +296,9 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.resources (
     detail TEXT,
     url TEXT,
     provenance TEXT DEFAULT 'course-authored',
+    folder_id TEXT,
+    lesson_id TEXT,
+    competency_id TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -1178,6 +1181,25 @@ async def unfavorite_library_item(item_id: str):
     return {"item_id": item_id, "favorite": False}
 
 
+@router.patch("/library/resources/{resource_id}/associations")
+async def update_resource_associations(resource_id: str, body: ResourceAssociationBody):
+    _ensure_seeded()
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="nenhuma associação informada")
+    assignments = ", ".join(f"{name} = %s" for name in fields)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {SCHEMA}.resources SET {assignments} WHERE id = %s RETURNING *",
+            (*fields.values(), resource_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="resource not found")
+        conn.commit()
+    return {"resource": dict(row)}
+
+
 @router.get("/projects")
 async def list_projects():
     _ensure_seeded()
@@ -1241,6 +1263,12 @@ class SessionUpdateBody(BaseModel):
 
 class SessionNoteBody(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
+
+
+class ResourceAssociationBody(BaseModel):
+    folder_id: Optional[str] = Field(default=None, max_length=180)
+    lesson_id: Optional[str] = Field(default=None, max_length=180)
+    competency_id: Optional[str] = Field(default=None, max_length=180)
 
 
 @router.get("/sessions/{session_id}/notes")

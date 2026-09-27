@@ -183,6 +183,15 @@ class PluginIntegrityTests(unittest.TestCase):
         self.assertTrue(refreshed["items"][0]["favorite"])
         unfavorited = asyncio.run(plugin_api.unfavorite_library_item("resource-library"))
         self.assertFalse(unfavorited["favorite"])
+        associated = asyncio.run(plugin_api.update_resource_associations(
+            "resource-library",
+            plugin_api.ResourceAssociationBody(folder_id="resources:containers", lesson_id="lesson-docker", competency_id="dockerfile"),
+        ))
+        self.assertEqual(associated["resource"]["lesson_id"], "lesson-docker")
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT folder_id, competency_id FROM {self.schema}.resources WHERE id = %s", ("resource-library",))
+            row = cur.fetchone()
+            self.assertEqual((row["folder_id"], row["competency_id"]), ("resources:containers", "dockerfile"))
 
     def test_session_notes_are_persisted_and_listed(self):
         note = asyncio.run(plugin_api.create_session_note("session-devops-active", plugin_api.SessionNoteBody(text="Revisar DNS")))
