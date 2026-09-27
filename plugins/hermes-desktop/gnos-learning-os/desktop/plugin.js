@@ -287,6 +287,22 @@ function Timeline() {
 function Lesson() {
   return jsx(LessonPage, { useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, SharedRichText, PortalDialog })
 }
+const artifactIcon = { video: 'device-camera-video', diagram: 'type-hierarchy', simulation: 'pulse', pdf: 'file-pdf', image: 'file-media', document: 'file-text' }
+function Lab() {
+  return jsx(LabPage, { useApi, postApi, host, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, ListRow, css })
+}
+function Assessments() {
+  return jsx(AssessmentsPage, { useApi, postApi, host, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css, kindIcon })
+}
+function Progress() {
+  return jsx(ProgressPage, { useApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css, evidencePercent, ListRow })
+}
+function Metrics() {
+  return jsx(MetricsPage, { useApi, Page, Loading, ErrorState, Empty, Card, css })
+}
+function Resources() {
+  return jsx(ResourcesPage, { useApi, mutateApi, host, BASE, Page, Loading, ErrorState, Empty, Card, ListRow, Badge, css, artifactIcon })
+}
 function Projects() {
   return jsx(ProjectsPage, { useApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css })
 }

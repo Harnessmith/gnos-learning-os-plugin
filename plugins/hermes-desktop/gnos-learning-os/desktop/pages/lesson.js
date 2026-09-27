@@ -104,18 +104,3 @@ function TerminalChrome({ children }) {
     ]
   })
 }
-function Lab() {
-  return jsx(LabPage, { useApi, postApi, host, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, ListRow, css })
-}
-function Assessments() {
-  return jsx(AssessmentsPage, { useApi, postApi, host, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css, kindIcon })
-}
-function Progress() {
-  return jsx(ProgressPage, { useApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css, evidencePercent, MonthCalendar })
-}
-function Metrics() {
-  return jsx(MetricsPage, { useApi, Page, Loading, ErrorState, Empty, Card, css })
-}
-function Resources() {
-  return jsx(ResourcesPage, { useApi, mutateApi, host, BASE, Page, Loading, ErrorState, Empty, Card, ListRow, Badge, css, artifactIcon })
-}

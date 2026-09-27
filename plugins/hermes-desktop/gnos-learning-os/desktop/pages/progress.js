@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
-export function ProgressPage({ useApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css, evidencePercent, MonthCalendar }) {
+export function ProgressPage({ useApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css, evidencePercent, ListRow }) {
   const { data, isLoading, error } = useApi('/evidence', ['evidence'])
   const items = data?.evidence || []
   const [selectedId, setSelectedId] = useState(null)
