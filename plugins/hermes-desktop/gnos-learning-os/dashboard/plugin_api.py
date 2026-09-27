@@ -307,6 +307,13 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.library_favorites (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS {SCHEMA}.session_resources (
+    session_id TEXT NOT NULL REFERENCES {SCHEMA}.sessions(id) ON DELETE CASCADE,
+    resource_id TEXT NOT NULL REFERENCES {SCHEMA}.resources(id) ON DELETE CASCADE,
+    used_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, resource_id)
+);
+
 CREATE TABLE IF NOT EXISTS {SCHEMA}.projects (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -1198,6 +1205,42 @@ async def update_resource_associations(resource_id: str, body: ResourceAssociati
             raise HTTPException(status_code=404, detail="resource not found")
         conn.commit()
     return {"resource": dict(row)}
+
+
+@router.post("/sessions/{session_id}/resources/{resource_id}")
+async def record_session_resource(session_id: str, resource_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT 1 FROM {SCHEMA}.sessions WHERE id = %s", (session_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        cur.execute(f"SELECT 1 FROM {SCHEMA}.resources WHERE id = %s", (resource_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="resource not found")
+        cur.execute(
+            f"INSERT INTO {SCHEMA}.session_resources (session_id, resource_id, used_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT (session_id, resource_id) DO UPDATE SET used_at = EXCLUDED.used_at",
+            (session_id, resource_id, _now()),
+        )
+        conn.commit()
+    return {"session_id": session_id, "resource_id": resource_id, "recorded": True}
+
+
+@router.get("/sessions/{session_id}/resources")
+async def list_session_resources(session_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT 1 FROM {SCHEMA}.sessions WHERE id = %s", (session_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        cur.execute(
+            f"SELECT r.*, sr.used_at FROM {SCHEMA}.session_resources sr "
+            f"JOIN {SCHEMA}.resources r ON r.id = sr.resource_id "
+            "WHERE sr.session_id = %s ORDER BY sr.used_at ASC",
+            (session_id,),
+        )
+        resources = [dict(row) for row in cur.fetchall()]
+    return {"session_id": session_id, "resources": resources, "total": len(resources)}
 
 
 @router.get("/projects")

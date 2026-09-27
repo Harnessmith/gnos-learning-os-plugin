@@ -192,6 +192,12 @@ class PluginIntegrityTests(unittest.TestCase):
             cur.execute(f"SELECT folder_id, competency_id FROM {self.schema}.resources WHERE id = %s", ("resource-library",))
             row = cur.fetchone()
             self.assertEqual((row["folder_id"], row["competency_id"]), ("resources:containers", "dockerfile"))
+        recorded = asyncio.run(plugin_api.record_session_resource("session-devops-active", "resource-library"))
+        self.assertTrue(recorded["recorded"])
+        asyncio.run(plugin_api.record_session_resource("session-devops-active", "resource-library"))
+        used = asyncio.run(plugin_api.list_session_resources("session-devops-active"))
+        self.assertEqual(used["total"], 1)
+        self.assertEqual(used["resources"][0]["id"], "resource-library")
 
     def test_session_notes_are_persisted_and_listed(self):
         note = asyncio.run(plugin_api.create_session_note("session-devops-active", plugin_api.SessionNoteBody(text="Revisar DNS")))
