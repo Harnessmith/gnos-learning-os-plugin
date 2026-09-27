@@ -168,7 +168,7 @@ const css = {
   navItemActive: { color: '#fff', background: '#171b23', boxShadow: 'inset 3px 0 0 var(--accent)' },
   appContent: { minWidth: 0, background: 'var(--background)' },
   profile: { marginTop: 'auto', border: '1px solid var(--border)', background: 'var(--card)', borderRadius: 14, padding: 14 },
-  topbar: { height: 96, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, borderBottom: '1px solid var(--border)', marginBottom: 28 },
+  topbar: { minHeight: 96, display: 'flex', alignItems: 'flex-end', flexWrap: 'wrap', justifyContent: 'space-between', gap: 18, paddingBottom: 18, borderBottom: '1px solid var(--border)', marginBottom: 28 },
   metric: { fontSize: 36, fontWeight: 800, letterSpacing: '-.045em', display: 'block', margin: '8px 0' }
 }
 
