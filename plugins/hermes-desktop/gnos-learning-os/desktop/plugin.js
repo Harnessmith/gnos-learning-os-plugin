@@ -6,7 +6,7 @@
 // plugin's own backend at /api/plugins/gnos-learning-os/* (see ../dashboard/plugin_api.py)
 // via ctx.rest. No page reads GNOS course files, learner state, or executes shell —
 // see ../contracts.md for the full contract.
-import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClient, Dialog, DialogContent, DialogHeader, DialogTitle, SandboxedFrame } from '@hermes/plugin-sdk'
+import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClient, Dialog, DialogContent, DialogHeader, DialogTitle } from '@hermes/plugin-sdk'
 import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
@@ -23,7 +23,10 @@ function rest(path, opts) {
 
 // Modal that renders portal HTML inside a sandboxed iframe via a `data:`
 // URL (btoa/unescape/encodeURIComponent round-trip keeps pt-BR accents
-// intact) — the SDK's SandboxedFrame only accepts http(s)/data: sources.
+// intact). Uses a plain `<iframe>` (not a plugin-sdk component — the SDK
+// only exports the shared UI kit, never a frame primitive) with a tight
+// `sandbox` allow-list so the embedded HTML can run its own scripts/styles
+// without reaching the host app.
 function PortalDialog({ open, onOpenChange, title, kind, ids }) {
   const { data, isLoading, error } = useApi(open ? (kind === 'session' ? `/sessions/${ids.sessionId}/portal` : `/courses/${ids.courseId}/lessons/${ids.lessonId}/portal`) : null, ['portal', kind, ids.sessionId || `${ids.courseId}/${ids.lessonId}`])
   const html = data && typeof data === 'object' && 'html' in data ? data.html : (typeof data === 'string' ? data : null)
@@ -42,7 +45,7 @@ function PortalDialog({ open, onOpenChange, title, kind, ids }) {
             : error
               ? jsx(ErrorState, { label: 'conteúdo da aula', error })
               : dataUrl
-                ? jsx(SandboxedFrame, { src: dataUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)' } })
+                ? jsx('iframe', { src: dataUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-popups', referrerPolicy: 'no-referrer', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
                 : jsx(Empty, { label: 'conteúdo renderizado' })
         })
       ]
