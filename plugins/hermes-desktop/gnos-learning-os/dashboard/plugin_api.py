@@ -706,6 +706,8 @@ async def get_today():
         "session": s.get("actual_topic") or s.get("planned_topic"),
         "objective": s.get("objective"),
         "duration": s.get("planned_duration"),
+        "actual_duration": s.get("actual_duration"),
+        "started_at": s.get("started_at"),
         "next": s.get("next_step"),
         "status": s.get("status"),
     }
