@@ -142,7 +142,7 @@ def sync_track_and_timeline(workspace_root: Path, learner: str, domain_id: str) 
     schedule = _load_schedule_file(workspace_root, learner, domain_id)
     meta = _load_domain_meta(workspace_root, domain_id)
 
-    track_id = f"track-{domain_id}"
+    track_id = f"track-domain-{domain_id}"
     planned = schedule.get("planned", [])
     actual = schedule.get("actual", [])
     competency_ids: list[str] = []

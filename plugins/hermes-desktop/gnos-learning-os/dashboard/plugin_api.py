@@ -644,7 +644,7 @@ async def list_tracks():
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             f"SELECT * FROM {SCHEMA}.tracks "
-            "WHERE id LIKE 'track-course-%' OR id LIKE 'track-user-%' ORDER BY created_at ASC"
+            "WHERE id LIKE 'track-course-%' OR id LIKE 'track-domain-%' OR id LIKE 'track-user-%' ORDER BY created_at ASC"
         )
         rows = cur.fetchall()
     return {"tracks": [_track_dict(r) for r in rows]}
@@ -674,14 +674,14 @@ async def get_timeline():
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            f"SELECT t.* FROM {SCHEMA}.timeline_entries t JOIN {SCHEMA}.sessions s "
-            "ON s.id = t.session_id WHERE s.track_id LIKE 'track-course-%' "
+            f"SELECT t.* FROM {SCHEMA}.timeline_entries t LEFT JOIN {SCHEMA}.sessions s "
+            "ON s.id = t.session_id WHERE (s.track_id LIKE 'track-course-%' OR s.track_id LIKE 'track-domain-%' OR s.track_id LIKE 'track-user-%' OR t.session_id IS NULL) "
             "AND t.source = 'planned' ORDER BY t.created_at ASC"
         )
         planned = cur.fetchall()
         cur.execute(
-            f"SELECT t.* FROM {SCHEMA}.timeline_entries t JOIN {SCHEMA}.sessions s "
-            "ON s.id = t.session_id WHERE s.track_id LIKE 'track-course-%' "
+            f"SELECT t.* FROM {SCHEMA}.timeline_entries t LEFT JOIN {SCHEMA}.sessions s "
+            "ON s.id = t.session_id WHERE (s.track_id LIKE 'track-course-%' OR s.track_id LIKE 'track-domain-%' OR s.track_id LIKE 'track-user-%' OR t.session_id IS NULL) "
             "AND t.source = 'actual' ORDER BY t.created_at ASC"
         )
         actual = cur.fetchall()
@@ -699,7 +699,7 @@ async def list_sessions():
         cur.execute(
             f"SELECT s.*, t.title AS track_title FROM {SCHEMA}.sessions s "
             f"LEFT JOIN {SCHEMA}.tracks t ON t.id = s.track_id "
-            "WHERE s.track_id LIKE 'track-course-%' "
+            "WHERE (s.track_id LIKE 'track-course-%' OR s.track_id LIKE 'track-domain-%' OR s.track_id LIKE 'track-user-%') "
             "ORDER BY COALESCE(s.actual_date, s.planned_date) DESC, s.updated_at DESC"
         )
         rows = cur.fetchall()
@@ -736,7 +736,7 @@ async def get_metrics():
         cur.execute(
             f"SELECT s.*, t.title AS track_title, t.stage AS track_stage "
             f"FROM {SCHEMA}.sessions s LEFT JOIN {SCHEMA}.tracks t ON t.id = s.track_id "
-            "WHERE s.track_id LIKE 'track-course-%' ORDER BY COALESCE(s.actual_date, s.planned_date) ASC"
+            "WHERE (s.track_id LIKE 'track-course-%' OR s.track_id LIKE 'track-domain-%' OR s.track_id LIKE 'track-user-%') ORDER BY COALESCE(s.actual_date, s.planned_date) ASC"
         )
         sessions = [dict(r) for r in cur.fetchall()]
         cur.execute(f"SELECT * FROM {SCHEMA}.courses")
@@ -1071,7 +1071,7 @@ async def list_labs():
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             f"SELECT l.* FROM {SCHEMA}.labs l JOIN {SCHEMA}.sessions s ON s.id = l.session_id "
-            "WHERE s.track_id LIKE 'track-course-%' ORDER BY l.created_at ASC"
+            "WHERE (s.track_id LIKE 'track-course-%' OR s.track_id LIKE 'track-domain-%' OR s.track_id LIKE 'track-user-%') ORDER BY l.created_at ASC"
         )
         rows = cur.fetchall()
     return {"labs": [_lab_dict(r) for r in rows]}
