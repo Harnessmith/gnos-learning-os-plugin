@@ -10,6 +10,7 @@ import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClien
 import { useState, useEffect } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { createApiActions } from './api_client.js'
+import { RichText as SharedRichText } from './components/rich_text.js'
 
 const BASE = '/gnos'
 let restImpl = null
@@ -76,39 +77,7 @@ function PortalDialog({ open, onOpenChange, title, kind, ids }) {
   })
 }
 
-// Renders the light markdown lesson-design writes into block `text`/`code`:
-// **bold**, blank-line paragraphs, and `- ` bullet lists. Deliberately not a
-// full markdown engine — matches exactly what skills/lesson-design produces
-// (see lesson-contract.md's "Output text rules"), nothing more.
-function inlineMarkdown(line) {
-  const parts = line.split(/(\*\*[^*]+\*\*)/g).filter((part) => part !== '')
-  return parts.map((part, index) => part.startsWith('**') && part.endsWith('**') && part.length > 3
-    ? jsx('strong', { children: part.slice(2, -2) }, index)
-    : jsx('span', { children: part }, index))
-}
-function RichText({ text }) {
-  const raw = text == null ? '' : String(text)
-  if (!raw.trim()) return null
-  const paragraphs = raw.split(/\n\s*\n/).map((chunk) => chunk.trim()).filter(Boolean)
-  return jsx('div', {
-    style: { display: 'grid', gap: 12 },
-    children: paragraphs.map((paragraph, pIndex) => {
-      const lines = paragraph.split('\n').map((line) => line.trim()).filter(Boolean)
-      const isList = lines.length > 0 && lines.every((line) => /^[-•]\s+/.test(line))
-      if (isList) {
-        return jsx('ul', {
-          style: { margin: 0, paddingLeft: 20, display: 'grid', gap: 6 },
-          children: lines.map((line, lIndex) => jsx('li', { style: { lineHeight: 1.65, fontSize: 14 }, children: inlineMarkdown(line.replace(/^[-•]\s+/, '')) }, lIndex))
-        }, pIndex)
-      }
-      return jsx('p', {
-        style: { margin: 0, lineHeight: 1.7, fontSize: 14 },
-        children: lines.map((line, lIndex) => jsxs('span', { children: [inlineMarkdown(line), lIndex < lines.length - 1 ? jsx('br', {}) : null] }, lIndex))
-      }, pIndex)
-    })
-  })
-}
-
+// Rich lesson text is implemented in components/rich_text.js for reuse across pages.
 function useApi(path, queryKey, opts = {}) {
   return useQuery({
     queryKey: ['gnos', ...queryKey],
@@ -716,7 +685,7 @@ function Lesson() {
           }
           return jsx(Card, {
             title: type, icon: blockIcon[type] || 'symbol-misc',
-            children: isCode ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body })
+            children: isCode ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(SharedRichText, { text: body })
           }, `${type}-${index}`)
         }) }),
         jsx('aside', { children: jsxs('div', { style: { position: 'sticky', top: 16, display: 'grid', gap: 14 }, children: [
