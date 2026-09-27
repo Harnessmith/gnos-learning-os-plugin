@@ -731,10 +731,81 @@ function Progress() {
   const items = data?.evidence || []
   const [selectedId, setSelectedId] = useState(null)
   const selected = items.find((item) => item.id === selectedId) || items[items.length - 1]
-  return jsx(Page, { label: 'Learner model', title: 'Mapa de competências', subtitle: 'Drill-down por competência: evidências, tentativas, erros e a próxima intervenção.', children: isLoading ? jsx(Loading, { label: 'progresso' }) : error ? jsx(ErrorState, { label: 'progresso', error }) : !items.length ? jsx(Empty, { label: 'progresso' }) : jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(280px,.8fr) minmax(0,1.2fr)', gap: 16 }, children: [
+  const { data: sessionData } = useApi('/sessions', ['sessions'])
+  const sessions = sessionData?.sessions || []
+  return jsx(Page, { label: 'Learner model', title: 'Mapa de competências', subtitle: 'Drill-down por competência: evidências, tentativas, erros e a próxima intervenção — mais o calendário de estudo do mês.', children: isLoading ? jsx(Loading, { label: 'progresso' }) : error ? jsx(ErrorState, { label: 'progresso', error }) : jsxs('div', { style: { display: 'grid', gap: 16 }, children: [
+    jsx(MonthCalendar, { sessions }),
+    !items.length ? jsx(Empty, { label: 'progresso' }) : jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(280px,.8fr) minmax(0,1.2fr)', gap: 16 }, children: [
     jsx(Card, { title: 'Árvore de conhecimento', icon: 'type-hierarchy', children: items.map((item) => jsx('button', { type: 'button', className: 'gnos-nav', onClick: () => setSelectedId(item.id), style: { ...css.navItem, marginLeft: item.depth * 13, width: `calc(100% - ${item.depth * 13}px)`, ...(selected?.id === item.id ? css.navItemActive : {}) }, children: jsxs('span', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 8 }, children: [jsx('span', { children: item.label }), jsx(Badge, { state: item.status, children: item.status })] }) }, item.id)) }),
     selected && jsx(Card, { accent: true, children: jsxs('div', { children: [jsx(Badge, { state: selected.status, children: selected.label }), jsx('h2', { style: { margin: '14px 0 8px', fontSize: 22 }, children: `Estado atual: ${selected.status}` }), jsx('p', { style: { ...css.subtitle, marginBottom: 16 }, children: selected.detail }), jsxs('div', { style: css.grid, children: [jsx(Card, { title: 'Tentativas', icon: 'history', children: jsx('strong', { style: css.metric, children: selected.attempts }) }), jsx(Card, { title: 'Atualização', icon: 'calendar', children: jsx('strong', { style: { fontSize: 13 }, children: selected.updated_at?.slice(0, 10) || '—' }) })] }), selected.misconceptions?.length ? jsxs('div', { style: { marginTop: 16 }, children: [jsx('p', { style: css.eyebrow, children: 'Misconceptions' }), jsx('ul', { children: selected.misconceptions.map((item) => jsx('li', { children: String(item) }, String(item))) })] }) : null, selected.next_intervention && jsxs('div', { style: { borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 16 }, children: [jsx('p', { style: css.eyebrow, children: 'Próxima intervenção' }), jsx('strong', { children: selected.next_intervention }), jsx('div', { style: { marginTop: 12 }, children: jsx(Navigate, { path: `${BASE}/lab`, primary: true, icon: 'beaker', children: 'Abrir laboratório' }) })] })] }) })
+  ] })
   ] }) })
+}
+
+// Month-grid calendar (Dom..Sáb) built with plain CSS grid — no external
+// library, since disk plugins may only import '@hermes/plugin-sdk', 'react'
+// and 'react/jsx-runtime'. Groups GNOS sessions by planned_date/actual_date
+// so a learner sees, per day, what was planned vs what actually happened.
+const WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+const MONTH_LABELS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+function MonthCalendar({ sessions }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth() } })
+  const byDay = {}
+  for (const s of sessions || []) {
+    for (const dateStr of [s.planned_date, s.actual_date]) {
+      if (!dateStr) continue
+      const key = String(dateStr).slice(0, 10)
+      if (!byDay[key]) byDay[key] = []
+      if (!byDay[key].find((x) => x.id === s.id)) byDay[key].push(s)
+    }
+  }
+  const first = new Date(cursor.year, cursor.month, 1)
+  const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate()
+  const leadBlanks = first.getDay()
+  const todayKey = new Date().toISOString().slice(0, 10)
+  const cells = []
+  for (let i = 0; i < leadBlanks; i++) cells.push(null)
+  for (let day = 1; day <= daysInMonth; day++) cells.push(day)
+  const pad = (n) => String(n).padStart(2, '0')
+  return jsx(Card, {
+    title: `${MONTH_LABELS[cursor.month]} ${cursor.year}`, icon: 'calendar',
+    children: jsxs('div', { children: [
+      jsxs('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }, children: [
+        jsx('button', { type: 'button', className: 'gnos-nav', style: { ...css.ghost, padding: '4px 10px' }, onClick: () => setCursor((c) => c.month === 0 ? { year: c.year - 1, month: 11 } : { year: c.year, month: c.month - 1 }), children: '← Anterior' }),
+        jsx('button', { type: 'button', className: 'gnos-nav', style: { ...css.ghost, padding: '4px 10px' }, onClick: () => { const d = new Date(); setCursor({ year: d.getFullYear(), month: d.getMonth() }) }, children: 'Hoje' }),
+        jsx('button', { type: 'button', className: 'gnos-nav', style: { ...css.ghost, padding: '4px 10px' }, onClick: () => setCursor((c) => c.month === 11 ? { year: c.year + 1, month: 0 } : { year: c.year, month: c.month + 1 }), children: 'Próximo →' })
+      ] }),
+      jsx('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, marginBottom: 4 }, children: WEEKDAY_LABELS.map((w) => jsx('div', { style: { fontSize: 11, textAlign: 'center', color: 'var(--muted-foreground)', padding: '2px 0' }, children: w }, w)) }),
+      jsx('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }, children: cells.map((day, idx) => {
+        if (day === null) return jsx('div', { style: { minHeight: 58 } }, `blank-${idx}`)
+        const key = `${cursor.year}-${pad(cursor.month + 1)}-${pad(day)}`
+        const dayItems = byDay[key] || []
+        const isToday = key === todayKey
+        const hasCompleted = dayItems.some((s) => s.status === 'completed')
+        return jsx('div', {
+          title: dayItems.map((s) => s.track_title || s.planned_topic || s.id).join('\n') || undefined,
+          style: {
+            minHeight: 58, borderRadius: 8, padding: '4px 6px',
+            border: isToday ? '1px solid var(--accent)' : '1px solid var(--border)',
+            background: dayItems.length ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : 'transparent',
+            display: 'flex', flexDirection: 'column', gap: 4
+          },
+          children: [
+            jsx('span', { style: { fontSize: 11.5, fontWeight: isToday ? 700 : 400, color: isToday ? 'var(--accent)' : 'var(--muted-foreground)' }, children: day }),
+            dayItems.slice(0, 2).map((s) => jsx('span', {
+              style: {
+                fontSize: 9.5, borderRadius: 4, padding: '1px 4px', lineHeight: 1.3,
+                background: hasCompleted && s.status === 'completed' ? 'color-mix(in srgb, #22c55e 25%, transparent)' : s.status === 'in_progress' ? 'color-mix(in srgb, var(--accent) 25%, transparent)' : 'color-mix(in srgb, var(--foreground) 10%, transparent)',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+              },
+              children: s.track_title || s.planned_topic || s.actual_topic || 'Sessão'
+            }, s.id)),
+            dayItems.length > 2 ? jsx('span', { style: { fontSize: 9, color: 'var(--muted-foreground)' }, children: `+${dayItems.length - 2}` }) : null
+          ]
+        }, key)
+      }) })
+    ] })
+  })
 }
 function Metrics() {
   const { data, isLoading, error } = useApi('/metrics', ['metrics'])
