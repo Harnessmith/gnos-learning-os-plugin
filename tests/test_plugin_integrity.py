@@ -109,6 +109,20 @@ class PluginIntegrityTests(unittest.TestCase):
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["notes"][0]["text"], "Revisar DNS")
 
+    def test_review_queue_prioritizes_repair_needed(self):
+        now = plugin_api._now()
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.schema}.evidence "
+                "(id, competency_id, label, status, attempts, misconceptions_json, updated_at) "
+                "VALUES ('evidence-review', 'course:devops:dns', 'DNS', 'repair-needed', 2, '[]', %s)",
+                (now,),
+            )
+            conn.commit()
+        result = asyncio.run(plugin_api.get_review_queue())
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["status"], "repair-needed")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -645,6 +645,23 @@ async def get_next_study():
     return {"kind": "empty", "reason": "nenhuma ação pendente"}
 
 
+@router.get("/review/queue")
+async def get_review_queue(limit: int = 20):
+    """Return a small review queue ordered by pedagogical urgency."""
+    _ensure_seeded()
+    limit = max(1, min(int(limit), 100))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.evidence "
+            "WHERE status IN ('repair-needed', 'practicing', 'exposed') "
+            "ORDER BY CASE status WHEN 'repair-needed' THEN 0 WHEN 'practicing' THEN 1 ELSE 2 END, updated_at ASC "
+            "LIMIT %s",
+            (limit,),
+        )
+        items = [_evidence_dict(row) for row in cur.fetchall()]
+    return {"items": items, "total": len(items), "limit": limit}
+
+
 @router.get("/today")
 async def get_today():
     _ensure_seeded()
