@@ -615,7 +615,32 @@ function Lesson() {
     jsx(Page, {
       label: session.teacher, title: session.actual_topic || session.planned_topic, subtitle: session.objective, actions,
       children: jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 286px', gap: 16 }, children: [
-        jsx('section', { style: { display: 'grid', gap: 14 }, children: (session.blocks || []).map(([type, body], index) => jsx(Card, { title: type, icon: blockIcon[type] || 'symbol-misc', children: ['Código', 'Diagrama', 'Equação'].includes(type) ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body }) }, `${type}-${index}`)) }),
+        jsx('section', { style: { display: 'grid', gap: 14 }, children: (session.blocks || []).map(([type, body], index) => {
+          const isMedia = ['Diagrama', 'Vídeo', 'Simulação'].includes(type)
+          const isCode = ['Código', 'Equação'].includes(type)
+          if (isMedia) {
+            const clickable = Boolean(session.portal_path)
+            return jsx(Card, {
+              title: type, icon: blockIcon[type] || 'symbol-misc',
+              children: jsxs('button', {
+                type: 'button', disabled: !clickable, onClick: () => clickable && setPortalOpen(true),
+                style: {
+                  width: '100%', textAlign: 'left', border: 'none', borderRadius: 9, padding: 14,
+                  fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: 1.6,
+                  background: 'color-mix(in srgb, var(--foreground) 4%, transparent)',
+                  color: clickable ? 'var(--accent-2, var(--accent))' : 'var(--muted-foreground)',
+                  cursor: clickable ? 'pointer' : 'default', display: 'flex',
+                  alignItems: 'center', justifyContent: 'space-between', gap: 10
+                },
+                children: [body, clickable && jsx('span', { style: { fontSize: 12, opacity: .85, whiteSpace: 'nowrap' }, children: 'Abrir →' })]
+              })
+            }, `${type}-${index}`)
+          }
+          return jsx(Card, {
+            title: type, icon: blockIcon[type] || 'symbol-misc',
+            children: isCode ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body })
+          }, `${type}-${index}`)
+        }) }),
         jsx('aside', { children: jsxs('div', { style: { position: 'sticky', top: 16, display: 'grid', gap: 14 }, children: [
           jsx(Card, { title: 'Estado da sessão', icon: 'pulse', children: jsxs('div', { children: [jsx(Badge, { state: session.status, children: session.status }), jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: `${session.planned_duration || '—'} minutos planejados` })] }) }),
           jsx(Card, { title: 'Próximo passo', icon: 'arrow-swap', children: jsx('p', { style: { margin: 0, lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: session.next_step || 'Aguardando conclusão da aula' }) }),
