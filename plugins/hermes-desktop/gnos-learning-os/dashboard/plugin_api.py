@@ -299,6 +299,11 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.resources (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS {SCHEMA}.library_favorites (
+    item_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS {SCHEMA}.projects (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -1076,6 +1081,8 @@ async def list_library(page: int = 1, page_size: int = 12, folder_id: Optional[s
         course_rows = [dict(row) for row in cur.fetchall()]
         cur.execute(f"SELECT * FROM {SCHEMA}.resources ORDER BY created_at ASC")
         resources = [dict(row) for row in cur.fetchall()]
+        cur.execute(f"SELECT item_id FROM {SCHEMA}.library_favorites")
+        favorite_ids = {row["item_id"] for row in cur.fetchall()}
 
     course_titles = {str(course["id"]): course.get("title") or course["id"] for course in course_rows}
     for course in course_rows:
@@ -1096,6 +1103,7 @@ async def list_library(page: int = 1, page_size: int = 12, folder_id: Optional[s
                 "detail": source.get("verification_notes") or source.get("type") or "Fonte de estudo",
                 "url": source.get("url"),
                 "provenance": source.get("type") or "course-authored",
+                "favorite": f"source:{course_id}:{source_id}" in favorite_ids,
             })
     for resource in resources:
         resource_course = resource.get("course_id")
@@ -1108,6 +1116,7 @@ async def list_library(page: int = 1, page_size: int = 12, folder_id: Optional[s
             "folder_type": "resources",
             "subject_id": resource_course,
             "subject_title": subject_title,
+            "favorite": resource["id"] in favorite_ids,
         })
 
     if q and q.strip():
@@ -1146,6 +1155,27 @@ async def list_library(page: int = 1, page_size: int = 12, folder_id: Optional[s
         "total": total,
         "has_more": start + page_size < total,
     }
+
+
+@router.post("/library/favorites/{item_id:path}")
+async def favorite_library_item(item_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {SCHEMA}.library_favorites (item_id, created_at) VALUES (%s, %s) ON CONFLICT (item_id) DO NOTHING",
+            (item_id, _now()),
+        )
+        conn.commit()
+    return {"item_id": item_id, "favorite": True}
+
+
+@router.delete("/library/favorites/{item_id:path}")
+async def unfavorite_library_item(item_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {SCHEMA}.library_favorites WHERE item_id = %s", (item_id,))
+        conn.commit()
+    return {"item_id": item_id, "favorite": False}
 
 
 @router.get("/projects")

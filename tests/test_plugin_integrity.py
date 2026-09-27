@@ -177,6 +177,12 @@ class PluginIntegrityTests(unittest.TestCase):
         resources = asyncio.run(plugin_api.list_library(folder_id="resources:general", kind="resource"))
         self.assertEqual(resources["total"], 1)
         self.assertEqual(resources["items"][0]["id"], "resource-library")
+        favorited = asyncio.run(plugin_api.favorite_library_item("resource-library"))
+        self.assertTrue(favorited["favorite"])
+        refreshed = asyncio.run(plugin_api.list_library(folder_id="resources:general", kind="resource"))
+        self.assertTrue(refreshed["items"][0]["favorite"])
+        unfavorited = asyncio.run(plugin_api.unfavorite_library_item("resource-library"))
+        self.assertFalse(unfavorited["favorite"])
 
     def test_session_notes_are_persisted_and_listed(self):
         note = asyncio.run(plugin_api.create_session_note("session-devops-active", plugin_api.SessionNoteBody(text="Revisar DNS")))
