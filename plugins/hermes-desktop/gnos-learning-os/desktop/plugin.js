@@ -917,8 +917,12 @@ function Metrics() {
 function Resources() {
   const [folderId, setFolderId] = useState(null)
   const [page, setPage] = useState(1)
+  const [query, setQuery] = useState('')
+  const [kind, setKind] = useState('all')
   const queryFolder = folderId ? `&folder_id=${encodeURIComponent(folderId)}` : ''
-  const { data, isLoading, error } = useApi(`/library?page=${page}&page_size=12${queryFolder}`, ['library', folderId, page])
+  const querySearch = query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''
+  const queryKind = kind !== 'all' ? `&kind=${kind}` : ''
+  const { data, isLoading, error } = useApi(`/library?page=${page}&page_size=12${queryFolder}${querySearch}${queryKind}`, ['library', folderId, page, query, kind])
   const folders = data?.folders || []
   const selectedFolder = data?.selected_folder || folderId
   const items = data?.items || []
@@ -928,7 +932,9 @@ function Resources() {
     subtitle: 'Cada matéria tem suas próprias pastas. A lista é paginada para crescer junto com seus estudos.',
     children: isLoading ? jsx(Loading, { label: 'biblioteca' }) : error ? jsx(ErrorState, { label: 'biblioteca', error }) : jsxs('div', {
       style: { display: 'grid', gap: 16 }, children: [
-        jsx(Card, { title: 'Pastas por matéria', icon: 'folder', children: !folders.length ? jsx(Empty, { label: 'pastas' }) : jsx('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 10 }, children: folders.map((folder) => jsx('button', {
+        jsx(Card, { title: 'Pastas por matéria', icon: 'folder', children: jsxs('div', { style: { display: 'grid', gap: 12 }, children: [
+          jsxs('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 180px', gap: 10 }, children: [jsx('input', { className: 'gnos-select', value: query, placeholder: 'Buscar recursos e fontes...', onChange: (event) => { setQuery(event.target.value); setPage(1) } }), jsx('select', { className: 'gnos-select', value: kind, onChange: (event) => { setKind(event.target.value); setPage(1) }, children: [jsx('option', { value: 'all', children: 'Todos os tipos' }), jsx('option', { value: 'source', children: 'Fontes' }), jsx('option', { value: 'resource', children: 'Recursos' })] })] }),
+          !folders.length ? jsx(Empty, { label: 'pastas' }) : jsx('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 10 }, children: folders.map((folder) => jsx('button', {
           type: 'button', className: 'gnos-action', onClick: () => selectFolder(folder.id),
           style: { textAlign: 'left', padding: 14, borderRadius: 10, border: folder.id === selectedFolder ? '1px solid var(--accent)' : '1px solid var(--border)', background: folder.id === selectedFolder ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'var(--card)', color: 'var(--foreground)', cursor: 'pointer' },
           children: jsxs('div', { children: [jsxs('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }, children: [jsx('strong', { children: folder.title }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 12 }, children: folder.count })] }), jsx('small', { style: { display: 'block', marginTop: 6, color: 'var(--muted-foreground)' }, children: folder.type === 'sources' ? 'Fontes e referências' : 'Materiais de estudo' })] })
