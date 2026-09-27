@@ -37,11 +37,10 @@ export function TracksPage({ useApi, mutateApi, host, BASE, Page, Loading, Error
       return jsx(Card, { title: t.title, icon: 'library', children: editingId === t.id ? editor(`Editar · ${t.title}`) : jsxs('div', { children: [jsx('div', { style: { color: 'var(--muted-foreground)', marginBottom: 12, fontSize: 13 }, children: t.stage }), jsx(Badge, { state: t.status, children: t.status }), jsx('p', { style: { marginBottom: 0, marginTop: 12, color: 'var(--muted-foreground)', fontSize: 13, lineHeight: 1.5 }, children: t.detail }), jsxs('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }, children: [t.source_type === 'user' && jsx(Navigate, { icon: 'edit', onClick: () => beginEdit(t), children: 'Editar' }), t.source_type === 'user' && jsx(Navigate, { icon: 'trash', onClick: () => removeTrack(t), children: 'Apagar' }), t.source_type !== 'user' && jsx(Badge, { state: 'planned', children: `Origem: ${t.source_type}` }), hasCourse && jsx(Navigate, { icon: 'list-tree', onClick: () => setOpenCourseId(openCourseId === courseId ? null : courseId), children: openCourseId === courseId ? 'Fechar curso' : 'Ver curso, módulos e aulas' })] })] }) }, t.id)
     }) }),
     openCourseId && jsx(CourseExplorer, { courseId: openCourseId, onClose: () => setOpenCourseId(null) })
-  ] })
+  ] }) })
 }
 
-
-const artifactIcon = { video: 'device-camera-video', diagram: 'type-hierarchy', simulation: 'pulse', pdf: 'file-pdf', image: 'file-media', document: 'file-text' }
+const trackArtifactIcon = { video: 'device-camera-video', diagram: 'type-hierarchy', simulation: 'pulse', pdf: 'file-pdf', image: 'file-media', document: 'file-text' }
 
 // Only real http(s) URLs are safe to hand to host.openExternal from a
 // possibly-remote gateway: a `location.path` is a server-local filesystem
@@ -167,7 +166,7 @@ function CourseExplorer({ courseId, onClose }) {
                                     children: [
                                       jsx('div', { style: { fontWeight: 620, fontSize: 12.5, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--muted-foreground)', marginTop: 4 }, children: `Vídeos e mídia (${lessonArtifacts.length})` }),
                                       lessonArtifacts.map((a) => jsx(ListRow, {
-                                        icon: artifactIcon[a.type] || 'file',
+                                        icon: trackArtifactIcon[a.type] || 'file',
                                         title: a.title,
                                         detail: a.purpose,
                                         action: artifactHref(a.location) && jsx(Navigate, { onClick: () => host.openExternal?.(artifactHref(a.location)), icon: 'link-external', children: 'Abrir' })
@@ -181,7 +180,7 @@ function CourseExplorer({ courseId, onClose }) {
                           }, lesson.id)
                         }),
                         topicArtifacts.length > 0 && topicArtifacts.map((a) => jsx(ListRow, {
-                          icon: artifactIcon[a.type] || 'file',
+                          icon: trackArtifactIcon[a.type] || 'file',
                           title: a.title,
                           detail: a.purpose,
                           action: artifactHref(a.location) && jsx(Navigate, { onClick: () => host.openExternal?.(artifactHref(a.location)), icon: 'link-external', children: 'Abrir' })
