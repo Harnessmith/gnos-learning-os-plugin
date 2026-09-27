@@ -107,6 +107,40 @@ class PluginIntegrityTests(unittest.TestCase):
             asyncio.run(plugin_api.complete_session("session-planned-only", plugin_api.SessionCompleteBody()))
         self.assertEqual(ctx.exception.status_code, 409)
 
+    def test_manual_track_can_be_created_updated_and_deleted(self):
+        created = asyncio.run(plugin_api.create_track(plugin_api.TrackCreateBody(title="Trilha temporária")))
+        track_id = created["track"]["id"]
+        updated = asyncio.run(plugin_api.update_track(track_id, plugin_api.TrackUpdateBody(title="Trilha revisada")))
+        self.assertEqual(updated["track"]["title"], "Trilha revisada")
+        deleted = asyncio.run(plugin_api.delete_track(track_id))
+        self.assertEqual(deleted["deleted"], track_id)
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT id FROM {self.schema}.tracks WHERE id = %s", (track_id,))
+            self.assertIsNone(cur.fetchone())
+
+    def test_session_start_then_complete_is_idempotent(self):
+        now = plugin_api._now()
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.schema}.sessions "
+                "(id, track_id, kind, planned_topic, planned_date, status, created_at, updated_at) "
+                "VALUES ('session-lifecycle', 'track-domain-devops', 'lesson', 'Ciclo', %s, 'planned', %s, %s)",
+                (now[:10], now, now),
+            )
+            conn.commit()
+        started = asyncio.run(plugin_api.start_session("session-lifecycle"))
+        self.assertEqual(started["status"], "in_progress")
+        completed = asyncio.run(plugin_api.complete_session("session-lifecycle", plugin_api.SessionCompleteBody(actual_duration=25)))
+        repeated = asyncio.run(plugin_api.complete_session("session-lifecycle", plugin_api.SessionCompleteBody(actual_duration=99)))
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(repeated["actual_duration"], 25)
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) AS count FROM {self.schema}.timeline_entries WHERE session_id = %s AND source = 'actual'",
+                ("session-lifecycle",),
+            )
+            self.assertEqual(cur.fetchone()["count"], 2)
+
     def test_session_notes_are_persisted_and_listed(self):
         note = asyncio.run(plugin_api.create_session_note("session-devops-active", plugin_api.SessionNoteBody(text="Revisar DNS")))
         self.assertEqual(note["note"]["text"], "Revisar DNS")
