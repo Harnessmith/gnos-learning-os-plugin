@@ -1006,7 +1006,7 @@ async def list_resources():
 
 
 @router.get("/library")
-async def list_library(page: int = 1, page_size: int = 12, folder_id: Optional[str] = None):
+async def list_library(page: int = 1, page_size: int = 12, folder_id: Optional[str] = None, q: Optional[str] = None, kind: Optional[str] = None):
     """Hierarchical, paginated library of course sources and study resources.
 
     Sources live in each course's structured ``sources_json``; resources live
@@ -1056,6 +1056,14 @@ async def list_library(page: int = 1, page_size: int = 12, folder_id: Optional[s
             "subject_id": resource_course,
             "subject_title": subject_title,
         })
+
+    if q and q.strip():
+        needle = q.strip().casefold()
+        records = [record for record in records if needle in " ".join(
+            str(record.get(field) or "") for field in ("title", "detail", "subject_title")
+        ).casefold()]
+    if kind in {"source", "resource"}:
+        records = [record for record in records if record.get("kind") == kind]
 
     folder_map: dict[str, dict[str, Any]] = {}
     for record in records:
