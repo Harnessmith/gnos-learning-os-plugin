@@ -11,6 +11,7 @@ import { useState, useEffect } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { createApiActions } from './api_client.js'
 import { RichText as SharedRichText } from './components/rich_text.js'
+import { PortalDialog } from './components/portal_dialog.js'
 
 const BASE = '/gnos'
 let restImpl = null
@@ -21,60 +22,6 @@ let osImpl = null
 function rest(path, opts) {
   if (!restImpl) throw new Error('gnos-learning-os: backend not initialized yet')
   return restImpl(path, opts)
-}
-
-// Modal that renders portal HTML inside a sandboxed iframe via a `data:`
-// URL (btoa/unescape/encodeURIComponent round-trip keeps pt-BR accents
-// intact). Uses a plain `<iframe>` (not a plugin-sdk component — the SDK
-// only exports the shared UI kit, never a frame primitive) with a tight
-// `sandbox` allow-list so the embedded HTML can run its own scripts/styles
-// without reaching the host app.
-//
-// Renders its own fixed-position overlay instead of the SDK's Dialog/
-// DialogContent: the host's Dialog primitive ships its own max-width
-// (a shadcn-style `sm:max-w-lg`) that wins over an inline `style` override,
-// so the portal rendered squeezed into a small corner box regardless of the
-// width/height we passed it. A hand-rolled overlay gives us full control
-// of size and gets us out from under that fixed max-width.
-function PortalDialog({ open, onOpenChange, title, kind, ids }) {
-  const { data, isLoading, error } = useApi(open ? (kind === 'session' ? `/sessions/${ids.sessionId}/portal` : `/courses/${ids.courseId}/lessons/${ids.lessonId}/portal`) : null, ['portal', kind, ids.sessionId || `${ids.courseId}/${ids.lessonId}`])
-  const html = data && typeof data === 'object' && 'html' in data ? data.html : (typeof data === 'string' ? data : null)
-  const dataUrl = html ? `data:text/html;base64,${btoa(unescape(encodeURIComponent(html)))}` : null
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e) => { if (e.key === 'Escape') onOpenChange(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onOpenChange])
-  if (!open) return null
-  return jsx('div', {
-    className: 'gnos-portal-overlay',
-    style: { position: 'fixed', inset: 0, zIndex: 2147483000, background: 'rgba(6,8,12,.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4vh 4vw' },
-    onClick: (e) => { if (e.target === e.currentTarget) onOpenChange(false) },
-    children: jsxs('div', {
-      className: 'gnos-portal-dialog',
-      style: { width: '92vw', maxWidth: 1200, height: '92vh', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 16, padding: 0, display: 'flex', flexDirection: 'column', boxShadow: '0 30px 90px rgba(0,0,0,.5)' },
-      children: [
-        jsxs('div', {
-          style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)' },
-          children: [
-            jsx('strong', { style: { fontSize: 16 }, children: title || 'Aula completa' }),
-            jsx('button', { type: 'button', className: 'gnos-action', onClick: () => onOpenChange(false), 'aria-label': 'Fechar', style: { border: '1px solid var(--border)', background: 'transparent', color: 'var(--foreground)', borderRadius: 8, width: 32, height: 32, cursor: 'pointer', fontSize: 16 }, children: '\u2715' })
-          ]
-        }),
-        jsx('div', {
-          style: { flex: 1, minHeight: 0, padding: '12px 20px 20px' },
-          children: isLoading
-            ? jsx(Loading, { label: 'conteúdo da aula' })
-            : error
-              ? jsx(ErrorState, { label: 'conteúdo da aula', error })
-              : dataUrl
-                ? jsx('iframe', { src: dataUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-popups', referrerPolicy: 'no-referrer', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
-                : jsx(Empty, { label: 'conteúdo renderizado' })
-        })
-      ]
-    })
-  })
 }
 
 // Rich lesson text is implemented in components/rich_text.js for reuse across pages.
@@ -585,7 +532,8 @@ function CourseExplorer({ courseId, onClose }) {
         onOpenChange: setPortalOpen,
         title: portalLesson?.title,
         kind: 'course',
-        ids: { courseId, lessonId: portalLesson?.id }
+        ids: { courseId, lessonId: portalLesson?.id },
+        useApi,
       })
     ]
   })
@@ -700,7 +648,8 @@ function Lesson() {
       onOpenChange: setPortalOpen,
       title: session.actual_topic || session.planned_topic,
       kind: 'session',
-      ids: { sessionId }
+      ids: { sessionId },
+      useApi,
     })
   ] })
 }
