@@ -643,7 +643,8 @@ async def list_tracks():
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            f"SELECT * FROM {SCHEMA}.tracks WHERE id LIKE 'track-course-%' ORDER BY created_at ASC"
+            f"SELECT * FROM {SCHEMA}.tracks "
+            "WHERE id LIKE 'track-course-%' OR id LIKE 'track-user-%' ORDER BY created_at ASC"
         )
         rows = cur.fetchall()
     return {"tracks": [_track_dict(r) for r in rows]}
@@ -1091,6 +1092,95 @@ async def get_lab(lab_id: str):
     out = _lab_dict(row)
     out["checks"] = [dict(c) for c in checks]
     return out
+
+
+class TrackCreateBody(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+    stage: str = Field(default="Em planejamento", max_length=120)
+    status: str = Field(default="unknown", max_length=40)
+    detail: Optional[str] = Field(default=None, max_length=500)
+
+
+class TrackUpdateBody(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=180)
+    stage: Optional[str] = Field(default=None, max_length=120)
+    status: Optional[str] = Field(default=None, max_length=40)
+    detail: Optional[str] = Field(default=None, max_length=500)
+
+
+class SessionUpdateBody(BaseModel):
+    planned_date: Optional[str] = Field(default=None, max_length=30)
+    planned_topic: Optional[str] = Field(default=None, max_length=300)
+    planned_duration: Optional[int] = Field(default=None, ge=1, le=1440)
+
+
+@router.post("/tracks")
+async def create_track(body: TrackCreateBody):
+    _ensure_seeded()
+    now = _now()
+    track_id = f"track-user-{uuid.uuid4().hex}"
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {SCHEMA}.tracks (id, title, stage, status, detail, competencies_json, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, '[]', %s, %s) RETURNING *",
+            (track_id, body.title.strip(), body.stage.strip(), body.status.strip(), body.detail, now, now),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    return {"track": _track_dict(row)}
+
+
+@router.patch("/tracks/{track_id}")
+async def update_track(track_id: str, body: TrackUpdateBody):
+    _ensure_seeded()
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="nenhuma alteração informada")
+    fields["updated_at"] = _now()
+    assignments = ", ".join(f"{name} = %s" for name in fields)
+    values = list(fields.values()) + [track_id]
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"UPDATE {SCHEMA}.tracks SET {assignments} WHERE id = %s RETURNING *", values)
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="track not found")
+        conn.commit()
+    return {"track": _track_dict(row)}
+
+
+@router.delete("/tracks/{track_id}")
+async def delete_track(track_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT id FROM {SCHEMA}.tracks WHERE id = %s", (track_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="track not found")
+        cur.execute(f"DELETE FROM {SCHEMA}.tracks WHERE id = %s", (track_id,))
+        conn.commit()
+    return {"deleted": track_id}
+
+
+@router.patch("/sessions/{session_id}")
+async def update_planned_session(session_id: str, body: SessionUpdateBody):
+    """Edit only future/planned sessions; actual history stays immutable."""
+    _ensure_seeded()
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="nenhuma alteração informada")
+    fields["updated_at"] = _now()
+    assignments = ", ".join(f"{name} = %s" for name in fields)
+    values = list(fields.values()) + [session_id]
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT status FROM {SCHEMA}.sessions WHERE id = %s", (session_id,))
+        existing = cur.fetchone()
+        if existing is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        if existing["status"] != "planned":
+            raise HTTPException(status_code=409, detail="sessões iniciadas ou concluídas não podem ser replanejadas")
+        cur.execute(f"UPDATE {SCHEMA}.sessions SET {assignments} WHERE id = %s RETURNING *", values)
+        row = cur.fetchone()
+        conn.commit()
+    return {"session": _session_dict(row)}
 
 
 # --------------------------------------------------------------------------

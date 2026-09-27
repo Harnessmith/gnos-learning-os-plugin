@@ -122,6 +122,11 @@ async function postApi(path, body) {
   await queryClient.invalidateQueries({ queryKey: ['gnos'] })
   return result
 }
+async function mutateApi(path, method, body) {
+  const result = await rest(path, { method, body: body ? JSON.stringify(body) : undefined, headers: body ? { 'Content-Type': 'application/json' } : undefined })
+  await queryClient.invalidateQueries({ queryKey: ['gnos'] })
+  return result
+}
 
 // Semantic status hues stay fixed regardless of theme (red = attention, green = mastered,
 // amber = in progress, blue = introduced); the rest follows the supplied GNOS palette.
@@ -382,43 +387,39 @@ function Tracks() {
   const tracks = data?.tracks || []
   const courses = coursesData?.courses || []
   const [openCourseId, setOpenCourseId] = useState(null)
+  const [editingId, setEditingId] = useState(null)
+  const [draft, setDraft] = useState({})
+  const [creating, setCreating] = useState(false)
+  const [busy, setBusy] = useState(false)
   const courseIdForTrack = (trackId) => trackId?.startsWith('track-course-') ? trackId.slice('track-course-'.length) : null
-  return jsx(Page, {
-    label: 'Áreas instaladas', title: 'Trilhas por competência',
-    subtitle: 'O estado descreve evidência de aprendizagem — não apenas um percentual acumulado.',
-    children: isLoading ? jsx(Loading, { label: 'trilhas' }) : error ? jsx(ErrorState, { label: 'trilhas', error }) : !tracks.length ? jsx(Empty, { label: 'trilhas' }) : jsxs('div', {
-      style: { display: 'grid', gap: 20 },
-      children: [
-        jsx('div', {
-          style: css.grid,
-          children: tracks.map((t) => {
-            const courseId = courseIdForTrack(t.id)
-            const hasCourse = courseId && courses.some((c) => c.id === courseId)
-            return jsx(Card, {
-              title: t.title, icon: 'library',
-              children: jsxs('div', {
-                children: [
-                  jsx('div', { style: { color: 'var(--muted-foreground)', marginBottom: 12, fontSize: 13 }, children: t.stage }),
-                  jsx(Badge, { state: t.status, children: t.status }),
-                  jsx('p', { style: { marginBottom: 0, marginTop: 12, color: 'var(--muted-foreground)', fontSize: 13, lineHeight: 1.5 }, children: t.detail }),
-                  hasCourse && jsx('div', {
-                    style: { marginTop: 16 },
-                    children: jsx(Navigate, {
-                      icon: 'list-tree',
-                      onClick: () => setOpenCourseId(openCourseId === courseId ? null : courseId),
-                      children: openCourseId === courseId ? 'Fechar estrutura do curso' : 'Ver curso, módulos e aulas'
-                    })
-                  })
-                ]
-              })
-            }, t.id)
-          })
-        }),
-        openCourseId && jsx(CourseExplorer, { courseId: openCourseId, onClose: () => setOpenCourseId(null) })
-      ]
-    })
-  })
+  const beginEdit = (track) => { setEditingId(track.id); setDraft({ title: track.title, stage: track.stage, status: track.status, detail: track.detail || '' }) }
+  const saveTrack = async () => {
+    if (!draft.title?.trim()) return
+    setBusy(true)
+    try { await mutateApi(editingId ? `/tracks/${editingId}` : '/tracks', editingId ? 'PATCH' : 'POST', { ...draft, title: draft.title.trim() }); host.toast?.(editingId ? 'Trilha atualizada.' : 'Trilha criada.', 'success'); setEditingId(null); setCreating(false) } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
+  }
+  const removeTrack = async (track) => {
+    if (!window.confirm(`Apagar a trilha “${track.title}”? As sessões ficarão sem trilha, mas o histórico não será apagado.`)) return
+    setBusy(true)
+    try { await mutateApi(`/tracks/${track.id}`, 'DELETE'); host.toast?.('Trilha apagada.', 'success') } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
+  }
+  const editor = (title) => jsx(Card, { title, icon: 'edit', children: jsxs('div', { style: { display: 'grid', gap: 10 }, children: [
+    jsx('input', { className: 'gnos-select', value: draft.title || '', placeholder: 'Nome da trilha', onChange: (event) => setDraft({ ...draft, title: event.target.value }) }),
+    jsxs('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }, children: [jsx('input', { className: 'gnos-select', value: draft.stage || '', placeholder: 'Estágio', onChange: (event) => setDraft({ ...draft, stage: event.target.value }) }), jsx('select', { className: 'gnos-select', value: draft.status || 'unknown', onChange: (event) => setDraft({ ...draft, status: event.target.value }), children: ['unknown', 'exposed', 'practicing', 'demonstrated', 'retained', 'repair-needed'].map((status) => jsx('option', { value: status, children: status }, status)) })] }),
+    jsx('textarea', { className: 'gnos-select', value: draft.detail || '', placeholder: 'Descrição ou próximo objetivo', rows: 3, onChange: (event) => setDraft({ ...draft, detail: event.target.value }) }),
+    jsxs('div', { style: { display: 'flex', gap: 8 }, children: [jsx(Navigate, { primary: true, onClick: saveTrack, children: busy ? 'Salvando…' : 'Salvar' }), jsx(Navigate, { onClick: () => { setEditingId(null); setCreating(false) }, children: 'Cancelar' })] })
+  ] }) })
+  return jsx(Page, { label: 'Áreas instaladas', title: 'Trilhas por competência', actions: jsx(Navigate, { primary: true, icon: 'add', onClick: () => { setCreating(true); setEditingId(null); setDraft({ title: '', stage: 'Em planejamento', status: 'unknown', detail: '' }) }, children: 'Nova trilha' }), subtitle: 'Edite a organização dos estudos sem perder as evidências e o histórico das sessões.', children: isLoading ? jsx(Loading, { label: 'trilhas' }) : error ? jsx(ErrorState, { label: 'trilhas', error }) : jsxs('div', { style: { display: 'grid', gap: 20 }, children: [
+    creating && editor('Nova trilha'),
+    !tracks.length && !creating ? jsx(Empty, { label: 'trilhas' }) : jsx('div', { style: css.grid, children: tracks.map((t) => {
+      const courseId = courseIdForTrack(t.id)
+      const hasCourse = courseId && courses.some((c) => c.id === courseId)
+      return jsx(Card, { title: t.title, icon: 'library', children: editingId === t.id ? editor(`Editar · ${t.title}`) : jsxs('div', { children: [jsx('div', { style: { color: 'var(--muted-foreground)', marginBottom: 12, fontSize: 13 }, children: t.stage }), jsx(Badge, { state: t.status, children: t.status }), jsx('p', { style: { marginBottom: 0, marginTop: 12, color: 'var(--muted-foreground)', fontSize: 13, lineHeight: 1.5 }, children: t.detail }), jsxs('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }, children: [jsx(Navigate, { icon: 'edit', onClick: () => beginEdit(t), children: 'Editar' }), jsx(Navigate, { icon: 'trash', onClick: () => removeTrack(t), children: 'Apagar' }), hasCourse && jsx(Navigate, { icon: 'list-tree', onClick: () => setOpenCourseId(openCourseId === courseId ? null : courseId), children: openCourseId === courseId ? 'Fechar curso' : 'Ver curso, módulos e aulas' })] })] }) }, t.id)
+    }) }),
+    openCourseId && jsx(CourseExplorer, { courseId: openCourseId, onClose: () => setOpenCourseId(null) })
+  ] })
 }
+
 
 const artifactIcon = { video: 'device-camera-video', diagram: 'type-hierarchy', simulation: 'pulse', pdf: 'file-pdf', image: 'file-media', document: 'file-text' }
 
@@ -585,15 +586,31 @@ function CourseExplorer({ courseId, onClose }) {
   })
 }
 function Timeline() {
-  const { data, isLoading, error } = useApi('/timeline', ['timeline'])
-  const [mode, setMode] = useState('actual')
-  const rows = data?.[mode] || []
-  const actions = jsxs('div', { style: { display: 'flex', gap: 6 }, children: [
-    jsx(Navigate, { primary: mode === 'actual', onClick: () => setMode('actual'), children: 'Real' }),
-    jsx(Navigate, { primary: mode === 'planned', onClick: () => setMode('planned'), children: 'Planejado' })
+  const { data, isLoading, error } = useApi('/sessions', ['sessions'])
+  const { data: timelineData } = useApi('/timeline', ['timeline'])
+  const sessions = data?.sessions || []
+  const [mode, setMode] = useState('planned')
+  const [editingId, setEditingId] = useState(null)
+  const [draft, setDraft] = useState({})
+  const [busy, setBusy] = useState(false)
+  const rows = sessions.filter((session) => mode === 'planned' ? session.status === 'planned' : session.status !== 'planned')
+  const beginEdit = (session) => { setEditingId(session.id); setDraft({ planned_date: session.planned_date || '', planned_topic: session.planned_topic || '', planned_duration: session.planned_duration || 30 }) }
+  const saveSchedule = async () => {
+    setBusy(true)
+    try { await mutateApi(`/sessions/${editingId}`, 'PATCH', { ...draft, planned_duration: Number(draft.planned_duration) }); host.toast?.('Sessão reagendada.', 'success'); setEditingId(null) } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
+  }
+  const completeSession = async (session) => {
+    setBusy(true)
+    try { await postApi(`/sessions/${session.id}/complete`, { actual_topic: session.planned_topic, actual_duration: session.planned_duration, next_step: session.next_step }); host.toast?.('Sessão concluída.', 'success') } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
+  }
+  const plannedCount = sessions.filter((session) => session.status === 'planned').length
+  const actualCount = sessions.length - plannedCount
+  return jsx(Page, { label: 'Planejado e real', title: 'Cronograma', actions: jsxs('div', { style: { display: 'flex', gap: 6 }, children: [jsx(Navigate, { primary: mode === 'planned', onClick: () => setMode('planned'), children: `Planejado (${plannedCount})` }), jsx(Navigate, { primary: mode === 'actual', onClick: () => setMode('actual'), children: `Real (${actualCount})` })] }), subtitle: 'Reagende aulas futuras, acompanhe o que foi executado e conclua sessões sem apagar o histórico.', children: isLoading ? jsx(Loading, { label: 'cronograma' }) : error ? jsx(ErrorState, { label: 'cronograma', error }) : jsxs('div', { style: { display: 'grid', gap: 16 }, children: [
+    jsx(Card, { title: mode === 'planned' ? 'Próximas sessões' : 'Sessões executadas', icon: mode === 'planned' ? 'calendar' : 'history', children: !rows.length ? jsx(Empty, { label: mode === 'planned' ? 'sessões planejadas' : 'sessões executadas' }) : jsx('div', { style: { display: 'grid', gap: 10 }, children: rows.map((session) => editingId === session.id ? jsx(Card, { title: `Editar · ${session.planned_topic || 'Sessão'}`, children: jsxs('div', { style: { display: 'grid', gap: 10 }, children: [jsx('input', { type: 'date', className: 'gnos-select', value: draft.planned_date, onChange: (event) => setDraft({ ...draft, planned_date: event.target.value }) }), jsx('input', { className: 'gnos-select', value: draft.planned_topic, placeholder: 'Tópico', onChange: (event) => setDraft({ ...draft, planned_topic: event.target.value }) }), jsx('input', { type: 'number', min: 1, max: 1440, className: 'gnos-select', value: draft.planned_duration, onChange: (event) => setDraft({ ...draft, planned_duration: event.target.value }) }), jsxs('div', { style: { display: 'flex', gap: 8 }, children: [jsx(Navigate, { primary: true, onClick: saveSchedule, children: busy ? 'Salvando…' : 'Salvar agenda' }), jsx(Navigate, { onClick: () => setEditingId(null), children: 'Cancelar' })] })] }) }, session.id) : jsx(ListRow, { icon: kindIcon[session.kind] || 'calendar', title: `${session.planned_date || session.actual_date || 'Sem data'} · ${session.actual_topic || session.planned_topic || 'Sessão'}`, detail: `${session.track_title || 'Trilha'} · ${session.planned_duration || session.actual_duration || '—'} min · ${session.status}`, action: mode === 'planned' ? jsxs('div', { style: { display: 'flex', gap: 6 }, children: [jsx(Navigate, { icon: 'edit', onClick: () => beginEdit(session), children: 'Editar' }), jsx(Navigate, { primary: true, icon: 'check', onClick: () => completeSession(session), children: 'Concluir' })] }) : jsx(Badge, { state: 'completed', children: 'concluída' }) }, session.id)) }) }),
+    mode === 'actual' && timelineData?.actual?.length ? jsx(Card, { title: 'Histórico de adaptações', icon: 'history', children: timelineData.actual.map((row) => jsx(ListRow, { icon: kindIcon[row.kind] || 'history', title: `${row.entry_date} · ${row.text}`, detail: row.adaptive_reason || row.kind, action: jsx(Badge, { state: row.kind === 'repair' ? 'repair-needed' : 'completed', children: row.kind }) }, row.id)) }) : null
   ] })
-  return jsx(Page, { label: 'Planejado e real', title: 'Cronograma', actions, subtitle: 'O histórico real explica adaptações sem apagar o plano que existia antes delas.', children: isLoading ? jsx(Loading, { label: 'cronograma' }) : error ? jsx(ErrorState, { label: 'cronograma', error }) : !rows.length ? jsx(Empty, { label: 'cronograma' }) : jsx(Card, { title: mode === 'actual' ? 'Execução real' : 'Plano original', icon: mode === 'actual' ? 'history' : 'checklist', children: rows.map((row) => jsx(ListRow, { icon: kindIcon[row.kind], title: `${row.entry_date} · ${row.text}`, detail: row.adaptive_reason || row.kind, action: jsx(Badge, { state: row.kind === 'repair' ? 'repair-needed' : mode === 'actual' ? 'completed' : 'planned', children: row.kind }) }, row.id)) }) })
 }
+
 function Lesson() {
   const { data: today, isLoading: isLoadingToday } = useApi('/today', ['today'])
   const { data: sessionsData, isLoading: isLoadingSessions } = useApi('/sessions', ['sessions'])
@@ -752,16 +769,22 @@ function Progress() {
   const { data, isLoading, error } = useApi('/evidence', ['evidence'])
   const items = data?.evidence || []
   const [selectedId, setSelectedId] = useState(null)
+  const [statusFilter, setStatusFilter] = useState('all')
   const selected = items.find((item) => item.id === selectedId) || items[items.length - 1]
   const { data: sessionData } = useApi('/sessions', ['sessions'])
   const sessions = sessionData?.sessions || []
-  return jsx(Page, { label: 'Learner model', title: 'Mapa de competências', subtitle: 'Drill-down por competência: evidências, tentativas, erros e a próxima intervenção — mais o calendário de estudo do mês.', children: isLoading ? jsx(Loading, { label: 'progresso' }) : error ? jsx(ErrorState, { label: 'progresso', error }) : jsxs('div', { style: { display: 'grid', gap: 16 }, children: [
+  const weights = { unknown: 0, exposed: 25, practicing: 50, demonstrated: 80, retained: 100, 'repair-needed': 30 }
+  const filteredItems = statusFilter === 'all' ? items : items.filter((item) => item.status === statusFilter)
+  const overall = items.length ? Math.round(items.reduce((sum, item) => sum + (weights[item.status] || 0), 0) / items.length) : 0
+  const counts = items.reduce((out, item) => { out[item.status] = (out[item.status] || 0) + 1; return out }, {})
+  return jsx(Page, { label: 'Learner model', title: 'Mapa de competências', subtitle: 'Veja a evolução por competência, filtre pontos de atenção e abra a próxima intervenção sem perder a árvore de dependências.', children: isLoading ? jsx(Loading, { label: 'progresso' }) : error ? jsx(ErrorState, { label: 'progresso', error }) : jsxs('div', { style: { display: 'grid', gap: 16 }, children: [
     jsx(MonthCalendar, { sessions }),
-    !items.length ? jsx(Empty, { label: 'progresso' }) : jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(280px,.8fr) minmax(0,1.2fr)', gap: 16 }, children: [
-    jsx(Card, { title: 'Árvore de conhecimento', icon: 'type-hierarchy', children: items.map((item) => jsx('button', { type: 'button', className: 'gnos-nav', onClick: () => setSelectedId(item.id), style: { ...css.navItem, marginLeft: item.depth * 13, width: `calc(100% - ${item.depth * 13}px)`, ...(selected?.id === item.id ? css.navItemActive : {}) }, children: jsxs('span', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 8 }, children: [jsx('span', { children: item.label }), jsx(Badge, { state: item.status, children: item.status })] }) }, item.id)) }),
-    selected && jsx(Card, { accent: true, children: jsxs('div', { children: [jsx(Badge, { state: selected.status, children: selected.label }), jsx('h2', { style: { margin: '14px 0 8px', fontSize: 22 }, children: `Estado atual: ${selected.status}` }), jsx('p', { style: { ...css.subtitle, marginBottom: 16 }, children: selected.detail }), jsxs('div', { style: css.grid, children: [jsx(Card, { title: 'Tentativas', icon: 'history', children: jsx('strong', { style: css.metric, children: selected.attempts }) }), jsx(Card, { title: 'Atualização', icon: 'calendar', children: jsx('strong', { style: { fontSize: 13 }, children: selected.updated_at?.slice(0, 10) || '—' }) })] }), selected.misconceptions?.length ? jsxs('div', { style: { marginTop: 16 }, children: [jsx('p', { style: css.eyebrow, children: 'Misconceptions' }), jsx('ul', { children: selected.misconceptions.map((item) => jsx('li', { children: String(item) }, String(item))) })] }) : null, selected.next_intervention && jsxs('div', { style: { borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 16 }, children: [jsx('p', { style: css.eyebrow, children: 'Próxima intervenção' }), jsx('strong', { children: selected.next_intervention }), jsx('div', { style: { marginTop: 12 }, children: jsx(Navigate, { path: `${BASE}/lab`, primary: true, icon: 'beaker', children: 'Abrir laboratório' }) })] })] }) })
+    jsxs('section', { style: css.grid, children: [jsx(Card, { title: 'Progresso geral', icon: 'graph', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: `${overall}%` }), jsx('div', { style: { height: 8, borderRadius: 5, background: 'color-mix(in srgb, var(--foreground) 8%, transparent)', overflow: 'hidden' }, children: jsx('div', { style: { height: '100%', width: `${overall}%`, background: 'var(--accent)' } }) }), jsx('small', { style: { display: 'block', color: 'var(--muted-foreground)', marginTop: 8 }, children: `${items.length} competências acompanhadas` })] }) }), jsx(Card, { title: 'Estados', icon: 'pulse', children: jsxs('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' }, children: Object.entries(counts).map(([status, count]) => jsx(Badge, { state: status, children: `${status}: ${count}` }, status)) }) }), jsx(Card, { title: 'Filtro', icon: 'filter', children: jsx('select', { className: 'gnos-select', value: statusFilter, onChange: (event) => setStatusFilter(event.target.value), children: [jsx('option', { value: 'all', children: 'Todas as competências' }), ...Object.keys(counts).map((status) => jsx('option', { value: status, children: status }, status))] }) })] }),
+    !items.length ? jsx(Empty, { label: 'competências' }) : jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(280px,.8fr) minmax(0,1.2fr)', gap: 16 }, children: [
+      jsx(Card, { title: 'Árvore de conhecimento', icon: 'type-hierarchy', children: !filteredItems.length ? jsx(Empty, { label: 'competências neste filtro' }) : filteredItems.map((item) => jsxs('button', { type: 'button', className: 'gnos-nav', onClick: () => setSelectedId(item.id), style: { ...css.navItem, marginLeft: item.depth * 13, width: `calc(100% - ${item.depth * 13}px)`, ...(selected?.id === item.id ? css.navItemActive : {}) }, children: [jsxs('span', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 8 }, children: [jsx('span', { style: { textAlign: 'left' }, children: item.label }), jsx(Badge, { state: item.status, children: item.status })] }), jsx('span', { style: { display: 'block', height: 4, marginTop: 6, borderRadius: 3, background: 'color-mix(in srgb, var(--foreground) 8%, transparent)' }, children: jsx('span', { style: { display: 'block', height: '100%', width: `${weights[item.status] || 0}%`, borderRadius: 3, background: 'var(--accent)' } }) })] }, item.id)) }),
+      selected && jsx(Card, { accent: true, children: jsxs('div', { children: [jsx(Badge, { state: selected.status, children: selected.label }), jsx('h2', { style: { margin: '14px 0 8px', fontSize: 22 }, children: `Estado atual: ${selected.status}` }), jsx('p', { style: { ...css.subtitle, marginBottom: 16 }, children: selected.detail }), jsxs('div', { style: css.grid, children: [jsx(Card, { title: 'Tentativas', icon: 'history', children: jsx('strong', { style: css.metric, children: selected.attempts }) }), jsx(Card, { title: 'Atualização', icon: 'calendar', children: jsx('strong', { style: { fontSize: 13 }, children: selected.updated_at?.slice(0, 10) || '—' }) })] }), selected.misconceptions?.length ? jsxs('div', { style: { marginTop: 16 }, children: [jsx('p', { style: css.eyebrow, children: 'Misconceptions' }), jsx('ul', { children: selected.misconceptions.map((item) => jsx('li', { children: String(item) }, String(item))) })] }) : null, selected.next_intervention && jsxs('div', { style: { borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 16 }, children: [jsx('p', { style: css.eyebrow, children: 'Próxima intervenção' }), jsx('strong', { children: selected.next_intervention }), jsx('div', { style: { marginTop: 12 }, children: jsx(Navigate, { path: `${BASE}/lab`, primary: true, icon: 'beaker', children: 'Abrir laboratório' }) })] })] }) })
+    ] })
   ] })
-  ] }) })
 }
 
 // Month-grid calendar (Dom..Sáb) built with plain CSS grid — no external
