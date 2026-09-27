@@ -231,6 +231,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.session_notes (
 CREATE TABLE IF NOT EXISTS {SCHEMA}.timeline_entries (
     id TEXT PRIMARY KEY,
     session_id TEXT REFERENCES {SCHEMA}.sessions(id) ON DELETE SET NULL,
+    track_id TEXT REFERENCES {SCHEMA}.tracks(id) ON DELETE SET NULL,
     source TEXT NOT NULL,
     entry_date TEXT NOT NULL,
     kind TEXT NOT NULL,

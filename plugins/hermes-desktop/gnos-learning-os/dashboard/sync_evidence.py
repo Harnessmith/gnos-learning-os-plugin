@@ -221,15 +221,15 @@ def sync_track_and_timeline(workspace_root: Path, learner: str, domain_id: str) 
                 cur.execute(
                     f"""
                     INSERT INTO {plugin_api.SCHEMA}.timeline_entries
-                        (id, session_id, source, entry_date, kind, text, adaptive_reason, created_at)
-                    VALUES (%s, NULL, 'planned', %s, %s, %s, %s, %s)
+                        (id, session_id, track_id, source, entry_date, kind, text, adaptive_reason, created_at)
+                    VALUES (%s, NULL, %s, 'planned', %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         entry_date = EXCLUDED.entry_date,
                         kind = EXCLUDED.kind,
                         text = EXCLUDED.text,
                         adaptive_reason = EXCLUDED.adaptive_reason
                     """,
-                    (entry["id"], entry["entry_date"], entry["kind"],
+                    (entry["id"], track_id, entry["entry_date"], entry["kind"],
                      entry.get("objective", ""), entry.get("adaptive_reason"), now),
                 )
                 planned_synced.append(entry["id"])
@@ -238,15 +238,15 @@ def sync_track_and_timeline(workspace_root: Path, learner: str, domain_id: str) 
                 cur.execute(
                     f"""
                     INSERT INTO {plugin_api.SCHEMA}.timeline_entries
-                        (id, session_id, source, entry_date, kind, text, adaptive_reason, created_at)
-                    VALUES (%s, NULL, 'actual', %s, %s, %s, %s, %s)
+                        (id, session_id, track_id, source, entry_date, kind, text, adaptive_reason, created_at)
+                    VALUES (%s, NULL, %s, 'actual', %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         entry_date = EXCLUDED.entry_date,
                         kind = EXCLUDED.kind,
                         text = EXCLUDED.text,
                         adaptive_reason = EXCLUDED.adaptive_reason
                     """,
-                    (entry["id"], entry["entry_date"], entry["kind"],
+                    (entry["id"], track_id, entry["entry_date"], entry["kind"],
                      entry.get("text", ""), entry.get("adaptive_reason"), now),
                 )
                 actual_synced.append(entry["id"])

@@ -255,6 +255,8 @@ class PluginIntegrityTests(unittest.TestCase):
                 cur.execute(f"SELECT entry_date, text FROM {self.schema}.timeline_entries WHERE id = %s", ("plan-1",))
                 row = cur.fetchone()
                 self.assertEqual((row["entry_date"], row["text"]), ("2026-09-30", "Dockerfile revisado"))
+                cur.execute(f"SELECT track_id FROM {self.schema}.timeline_entries WHERE id = %s", ("plan-1",))
+                self.assertEqual(cur.fetchone()["track_id"], "track-domain-containers")
                 cur.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.timeline_entries WHERE id = %s", ("plan-1",))
                 self.assertEqual(cur.fetchone()["count"], 1)
 
