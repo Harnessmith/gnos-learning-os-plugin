@@ -873,9 +873,28 @@ function Metrics() {
   })
 }
 function Resources() {
-  const { data, isLoading, error } = useApi('/resources', ['resources'])
-  const items = data?.resources || []
-  return jsx(Page, { label: 'Curadoria situada', title: 'Recursos', subtitle: 'Cada recurso serve à sessão atual; fontes oficiais têm preferência quando são a referência adequada.', children: isLoading ? jsx(Loading, { label: 'recursos' }) : error ? jsx(ErrorState, { label: 'recursos', error }) : !items.length ? jsx(Empty, { label: 'recursos' }) : jsx('div', { style: { display: 'grid', gap: 12 }, children: items.map((r) => jsx(Card, { children: jsxs('div', { style: { display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) auto', gap: 14, alignItems: 'center' }, children: [jsx('span', { style: { ...css.brandMark, width: 46, height: 46, fontSize: 10 }, children: r.type?.slice(0, 3).toUpperCase() }), jsxs('div', { children: [jsx('div', { style: css.eyebrow, children: r.provenance }), jsx('strong', { style: { display: 'block' }, children: r.title }), jsx('small', { style: { color: 'var(--muted-foreground)', lineHeight: 1.45 }, children: r.detail })] }), r.url ? jsx('a', { href: r.url, target: '_blank', rel: 'noreferrer', style: { ...css.ghost, textDecoration: 'none' }, children: 'Abrir fonte' }) : r.type === 'Lab' ? jsx(Navigate, { path: `${BASE}/lab`, primary: true, icon: 'beaker', children: 'Abrir lab' }) : jsx(Badge, { state: 'planned', children: 'Sem link' })] }) }, r.id)) }) })
+  const [folderId, setFolderId] = useState(null)
+  const [page, setPage] = useState(1)
+  const queryFolder = folderId ? `&folder_id=${encodeURIComponent(folderId)}` : ''
+  const { data, isLoading, error } = useApi(`/library?page=${page}&page_size=12${queryFolder}`, ['library', folderId, page])
+  const folders = data?.folders || []
+  const selectedFolder = data?.selected_folder || folderId
+  const items = data?.items || []
+  const selectFolder = (id) => { setFolderId(id); setPage(1) }
+  return jsx(Page, {
+    label: 'Biblioteca organizada', title: 'Recursos e fontes',
+    subtitle: 'Cada matéria tem suas próprias pastas. A lista é paginada para crescer junto com seus estudos.',
+    children: isLoading ? jsx(Loading, { label: 'biblioteca' }) : error ? jsx(ErrorState, { label: 'biblioteca', error }) : jsxs('div', {
+      style: { display: 'grid', gap: 16 }, children: [
+        jsx(Card, { title: 'Pastas por matéria', icon: 'folder', children: !folders.length ? jsx(Empty, { label: 'pastas' }) : jsx('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 10 }, children: folders.map((folder) => jsx('button', {
+          type: 'button', className: 'gnos-action', onClick: () => selectFolder(folder.id),
+          style: { textAlign: 'left', padding: 14, borderRadius: 10, border: folder.id === selectedFolder ? '1px solid var(--accent)' : '1px solid var(--border)', background: folder.id === selectedFolder ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'var(--card)', color: 'var(--foreground)', cursor: 'pointer' },
+          children: jsxs('div', { children: [jsxs('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }, children: [jsx('strong', { children: folder.title }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 12 }, children: folder.count })] }), jsx('small', { style: { display: 'block', marginTop: 6, color: 'var(--muted-foreground)' }, children: folder.type === 'sources' ? 'Fontes e referências' : 'Materiais de estudo' })] })
+        }, folder.id)) }) }),
+        jsx(Card, { title: selectedFolder ? (folders.find((folder) => folder.id === selectedFolder)?.title || 'Conteúdo da pasta') : 'Conteúdo', icon: 'references', children: !items.length ? jsx(Empty, { label: 'itens nesta pasta' }) : jsxs('div', { children: [items.map((item) => jsx(ListRow, { icon: item.kind === 'source' ? 'link-external' : (artifactIcon[item.type] || 'file-text'), title: item.title, detail: `${item.detail || item.provenance || ''}${item.subject_title ? ` · ${item.subject_title}` : ''}`, action: item.url ? jsx('a', { href: item.url, target: '_blank', rel: 'noreferrer', style: { ...css.ghost, textDecoration: 'none' }, children: 'Abrir' }) : jsx(Badge, { state: 'planned', children: 'Sem link' }) }, item.id)), jsxs('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, paddingTop: 14 }, children: [jsx('small', { style: { color: 'var(--muted-foreground)' }, children: `${data?.total || 0} item(ns) nesta pasta · página ${data?.page || 1}` }), jsxs('div', { style: { display: 'flex', gap: 8 }, children: [jsx('button', { type: 'button', className: 'gnos-nav', style: { ...css.ghost, padding: '6px 10px' }, disabled: page <= 1, onClick: () => setPage((current) => Math.max(1, current - 1)), children: '← Anterior' }), jsx('button', { type: 'button', className: 'gnos-nav', style: { ...css.ghost, padding: '6px 10px' }, disabled: !data?.has_more, onClick: () => setPage((current) => current + 1), children: 'Próxima →' })] })] })] }) })
+      ]
+    })
+  })
 }
 function Projects() {
   const { data, isLoading, error } = useApi('/projects', ['projects'])

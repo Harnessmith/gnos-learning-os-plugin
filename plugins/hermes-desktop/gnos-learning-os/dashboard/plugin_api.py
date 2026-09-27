@@ -970,6 +970,88 @@ async def list_resources():
     return {"resources": [dict(r) for r in rows]}
 
 
+@router.get("/library")
+async def list_library(page: int = 1, page_size: int = 12, folder_id: Optional[str] = None):
+    """Hierarchical, paginated library of course sources and study resources.
+
+    Sources live in each course's structured ``sources_json``; resources live
+    in the plugin table. This endpoint exposes both through stable folder IDs
+    without duplicating the underlying records. ``folder_id`` selects one
+    subject/course folder and pagination is applied only to its entries.
+    """
+    _ensure_seeded()
+    page = max(1, min(int(page), 100000))
+    page_size = max(1, min(int(page_size), 50))
+    records: list[dict[str, Any]] = []
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT id, title, sources_json FROM {SCHEMA}.courses ORDER BY title ASC")
+        course_rows = [dict(row) for row in cur.fetchall()]
+        cur.execute(f"SELECT * FROM {SCHEMA}.resources ORDER BY created_at ASC")
+        resources = [dict(row) for row in cur.fetchall()]
+
+    course_titles = {str(course["id"]): course.get("title") or course["id"] for course in course_rows}
+    for course in course_rows:
+        course_id = str(course["id"])
+        folder = f"sources:{course_id}"
+        sources = json.loads(course.get("sources_json") or "{}")
+        for source_id, source in sources.items():
+            if not isinstance(source, dict):
+                continue
+            records.append({
+                "id": f"source:{course_id}:{source_id}",
+                "kind": "source",
+                "folder_id": folder,
+                "folder_type": "sources",
+                "subject_id": course_id,
+                "subject_title": course.get("title") or course_id,
+                "title": source.get("title") or source_id,
+                "detail": source.get("verification_notes") or source.get("type") or "Fonte de estudo",
+                "url": source.get("url"),
+                "provenance": source.get("type") or "course-authored",
+            })
+    for resource in resources:
+        resource_course = resource.get("course_id")
+        folder = f"resources:{resource_course}" if resource_course else "resources:general"
+        subject_title = course_titles.get(str(resource_course), "Recursos gerais") if resource_course else "Recursos gerais"
+        records.append({
+            **resource,
+            "kind": "resource",
+            "folder_id": folder,
+            "folder_type": "resources",
+            "subject_id": resource_course,
+            "subject_title": subject_title,
+        })
+
+    folder_map: dict[str, dict[str, Any]] = {}
+    for record in records:
+        folder_key = record["folder_id"]
+        folder = folder_map.setdefault(folder_key, {
+            "id": folder_key,
+            "type": record["folder_type"],
+            "title": ("Fontes · " if record["folder_type"] == "sources" else "Recursos · ") + record["subject_title"],
+            "subject_id": record.get("subject_id"),
+            "subject_title": record["subject_title"],
+            "count": 0,
+        })
+        folder["count"] += 1
+    folders = sorted(folder_map.values(), key=lambda folder: (folder["type"], folder["title"].lower()))
+    selected = folder_id if folder_id in folder_map else (folders[0]["id"] if folders else None)
+    selected_records = [record for record in records if record["folder_id"] == selected]
+    selected_records.sort(key=lambda record: (str(record.get("title") or "").lower(), str(record.get("id"))))
+    total = len(selected_records)
+    start = (page - 1) * page_size
+    items = selected_records[start:start + page_size]
+    return {
+        "folders": folders,
+        "selected_folder": selected,
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "has_more": start + page_size < total,
+    }
+
+
 @router.get("/projects")
 async def list_projects():
     _ensure_seeded()
