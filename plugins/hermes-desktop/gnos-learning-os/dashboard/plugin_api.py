@@ -48,6 +48,7 @@ import psycopg
 from psycopg.rows import dict_row
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from services.recommendations import choose_next
 
 log = logging.getLogger("gnos_learning_os")
 
@@ -635,24 +636,27 @@ async def get_next_study():
             "WHERE status = 'in_progress' ORDER BY updated_at DESC LIMIT 1"
         )
         active = cur.fetchone()
-        if active:
-            session = _session_dict(active)
-            return {"kind": "session", "reason": "sessão em andamento", "session": session}
         cur.execute(
             f"SELECT * FROM {SCHEMA}.evidence "
             "WHERE status = 'repair-needed' ORDER BY updated_at ASC LIMIT 1"
         )
         repair = cur.fetchone()
-        if repair:
-            return {"kind": "repair", "reason": "competência precisa de reparo", "competency": _evidence_dict(repair)}
         cur.execute(
             f"SELECT * FROM {SCHEMA}.sessions "
             "WHERE status = 'planned' ORDER BY planned_date ASC, updated_at ASC LIMIT 1"
         )
         planned = cur.fetchone()
-    if planned:
-        return {"kind": "lesson", "reason": "próxima sessão planejada", "session": _session_dict(planned)}
-    return {"kind": "empty", "reason": "nenhuma ação pendente"}
+    active_data = _session_dict(active) if active else None
+    repair_data = _evidence_dict(repair) if repair else None
+    planned_data = _session_dict(planned) if planned else None
+    kind, reason, payload = choose_next(active_data, repair_data, planned_data)
+    if kind == "session":
+        return {"kind": kind, "reason": reason, "session": payload}
+    if kind == "repair":
+        return {"kind": kind, "reason": reason, "competency": payload}
+    if kind == "lesson":
+        return {"kind": kind, "reason": reason, "session": payload}
+    return {"kind": kind, "reason": reason}
 
 
 @router.get("/review/queue")

@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD_DIR = ROOT / "plugins" / "hermes-desktop" / "gnos-learning-os" / "dashboard"
 sys.path.insert(0, str(DASHBOARD_DIR))
+from services.recommendations import choose_next
 plugin_api = importlib.import_module("plugin_api")
 
 
@@ -63,6 +64,10 @@ class PluginIntegrityTests(unittest.TestCase):
     def test_domain_synced_track_is_listed(self):
         result = asyncio.run(plugin_api.list_tracks())
         self.assertIn("track-domain-devops", {track["id"] for track in result["tracks"]})
+
+    def test_next_priority_helper_prefers_active_session(self):
+        kind, reason, payload = choose_next({"id": "active"}, {"id": "repair"}, {"id": "planned"})
+        self.assertEqual((kind, reason, payload["id"]), ("session", "sessão em andamento", "active"))
 
     def test_timeline_entry_without_session_is_visible(self):
         result = asyncio.run(plugin_api.get_timeline())
