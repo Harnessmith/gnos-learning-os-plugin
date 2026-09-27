@@ -212,6 +212,52 @@ class PluginIntegrityTests(unittest.TestCase):
         result = asyncio.run(plugin_api.get_evidence_history("course:devops:dns"))
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["history"][0]["status"], "exposed")
+    def test_schedule_sync_is_idempotent_for_track_and_timeline(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            schedule_dir = root / "learners" / "joao" / "schedule"
+            domain_dir = root / "domains" / "containers"
+            schedule_dir.mkdir(parents=True)
+            domain_dir.mkdir(parents=True)
+            (domain_dir / "domain.json").write_text(
+                json.dumps({"title": "Containers", "stage_from": "Base", "stage_to": "Intermediário"}),
+                encoding="utf-8",
+            )
+            schedule_path = schedule_dir / "containers.json"
+            schedule_path.write_text(
+                json.dumps({
+                    "planned": [
+                        {"id": "plan-1", "entry_date": "2026-09-28", "kind": "lesson", "objective": "Dockerfile", "competency_ids": ["dockerfile"]},
+                        {"id": "plan-2", "entry_date": "2026-09-29", "kind": "checkpoint", "objective": "Checkpoint", "competency_ids": ["dockerfile"]},
+                    ],
+                    "actual": [{"id": "actual-1", "entry_date": "2026-09-27", "kind": "lesson", "text": "Docker concluído"}],
+                }),
+                encoding="utf-8",
+            )
+            first = sync_evidence.sync_track_and_timeline(root, "joao", "containers")
+            second = sync_evidence.sync_track_and_timeline(root, "joao", "containers")
+            self.assertEqual(first["track_id"], "track-domain-containers")
+            self.assertEqual(second["planned_synced"], ["plan-1", "plan-2"])
+            with plugin_api._connect() as conn, conn.cursor() as cur:
+                cur.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.tracks WHERE id = %s", ("track-domain-containers",))
+                self.assertEqual(cur.fetchone()["count"], 1)
+                cur.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.timeline_entries WHERE id IN ('plan-1', 'plan-2', 'actual-1')")
+                self.assertEqual(cur.fetchone()["count"], 3)
+            schedule_path.write_text(
+                json.dumps({
+                    "planned": [{"id": "plan-1", "entry_date": "2026-09-30", "kind": "lesson", "objective": "Dockerfile revisado", "competency_ids": ["dockerfile"]}],
+                    "actual": [{"id": "actual-1", "entry_date": "2026-09-27", "kind": "lesson", "text": "Docker concluído"}],
+                }),
+                encoding="utf-8",
+            )
+            sync_evidence.sync_track_and_timeline(root, "joao", "containers")
+            with plugin_api._connect() as conn, conn.cursor() as cur:
+                cur.execute(f"SELECT entry_date, text FROM {self.schema}.timeline_entries WHERE id = %s", ("plan-1",))
+                row = cur.fetchone()
+                self.assertEqual((row["entry_date"], row["text"]), ("2026-09-30", "Dockerfile revisado"))
+                cur.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.timeline_entries WHERE id = %s", ("plan-1",))
+                self.assertEqual(cur.fetchone()["count"], 1)
+
     def test_evidence_sync_is_idempotent_and_records_only_changes(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
