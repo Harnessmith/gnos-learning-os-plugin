@@ -686,6 +686,99 @@ async def get_session(session_id: str):
     return _session_dict(row)
 
 
+@router.get("/metrics")
+async def get_metrics():
+    """General progress metrics: study minutes and exercise counts broken
+    down by course/track, a weekly programmatic calendar (planned vs actual
+    sessions per weekday), and course completion percentages. Backs the
+    Métricas dashboard page."""
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT s.*, t.title AS track_title, t.stage AS track_stage "
+            f"FROM {SCHEMA}.sessions s LEFT JOIN {SCHEMA}.tracks t ON t.id = s.track_id "
+            "WHERE s.track_id LIKE 'track-course-%' ORDER BY COALESCE(s.actual_date, s.planned_date) ASC"
+        )
+        sessions = [dict(r) for r in cur.fetchall()]
+        cur.execute(f"SELECT * FROM {SCHEMA}.courses")
+        courses = {r["id"]: dict(r) for r in cur.fetchall()}
+        cur.execute(f"SELECT * FROM {SCHEMA}.course_lessons")
+        lessons = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            f"SELECT a.*, s.track_id AS session_track_id FROM {SCHEMA}.assessments a "
+            f"LEFT JOIN {SCHEMA}.sessions s ON s.id = a.session_id"
+        )
+        assessments = [dict(r) for r in cur.fetchall()]
+
+    weekday_names = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+    by_track: dict[str, dict] = {}
+    total_minutes_real = 0
+    total_minutes_planned = 0
+    weekday_counts = {name: {"planned": 0, "actual": 0} for name in weekday_names}
+    for s in sessions:
+        track_id = s.get("track_id") or "sem-trilha"
+        track_title = s.get("track_title") or "Sem trilha"
+        entry = by_track.setdefault(track_id, {
+            "track_id": track_id, "title": track_title, "stage": s.get("track_stage"),
+            "sessions_total": 0, "sessions_completed": 0,
+            "minutes_real": 0, "minutes_planned": 0, "exercises_done": 0, "exercises_total": 0,
+        })
+        entry["sessions_total"] += 1
+        if s.get("status") == "completed":
+            entry["sessions_completed"] += 1
+        actual_dur = s.get("actual_duration") or 0
+        planned_dur = s.get("planned_duration") or 0
+        entry["minutes_real"] += actual_dur
+        entry["minutes_planned"] += planned_dur
+        total_minutes_real += actual_dur
+        total_minutes_planned += planned_dur
+        for date_str, bucket in ((s.get("planned_date"), "planned"), (s.get("actual_date"), "actual")):
+            if not date_str:
+                continue
+            try:
+                weekday = datetime.fromisoformat(date_str[:10]).weekday()
+                weekday_counts[weekday_names[weekday]][bucket] += 1
+            except (ValueError, IndexError):
+                pass
+
+    for a in assessments:
+        track_id = a.get("session_track_id") or "sem-trilha"
+        entry = by_track.get(track_id)
+        if entry is None:
+            continue
+        entry["exercises_total"] += 1
+        if a.get("status") in ("corrected", "passed", "completed"):
+            entry["exercises_done"] += 1
+
+    course_progress = []
+    for course_id, course in courses.items():
+        course_lessons = [l for l in lessons if l.get("course_id") == course_id]
+        published = sum(1 for l in course_lessons if l.get("publication") == "ready")
+        total = len(course_lessons) or 1
+        course_progress.append({
+            "course_id": course_id, "title": course.get("title"),
+            "lessons_total": len(course_lessons), "lessons_ready": published,
+            "percent": round(published / total * 100),
+        })
+
+    tracks_out = sorted(by_track.values(), key=lambda t: -(t["minutes_real"] + t["sessions_total"]))
+    return {
+        "totals": {
+            "minutes_real": total_minutes_real,
+            "minutes_planned": total_minutes_planned,
+            "sessions_total": len(sessions),
+            "sessions_completed": sum(1 for s in sessions if s.get("status") == "completed"),
+            "exercises_done": sum(t["exercises_done"] for t in by_track.values()),
+            "exercises_total": sum(t["exercises_total"] for t in by_track.values()),
+        },
+        "by_track": tracks_out,
+        "weekday_calendar": [
+            {"weekday": name, **weekday_counts[name]} for name in weekday_names
+        ],
+        "courses": course_progress,
+    }
+
+
 @router.get("/sessions/{session_id}/portal")
 async def get_session_portal(session_id: str):
     """Full rendered lesson HTML (diagrams, KaTeX, highlighted code) for the
