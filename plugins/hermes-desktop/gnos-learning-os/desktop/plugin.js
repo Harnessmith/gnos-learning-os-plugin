@@ -9,6 +9,7 @@
 import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClient } from '@hermes/plugin-sdk'
 import { useState, useEffect } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
+import { createApiActions } from './api_client.js'
 
 const BASE = '/gnos'
 let restImpl = null
@@ -117,15 +118,14 @@ function useApi(path, queryKey, opts = {}) {
   })
 }
 
-async function postApi(path, body) {
-  const result = await rest(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined, headers: body ? { 'Content-Type': 'application/json' } : undefined })
-  await queryClient.invalidateQueries({ queryKey: ['gnos'] })
-  return result
+let apiActions = null
+function postApi(path, body) {
+  if (!apiActions) throw new Error('gnos-learning-os: API actions not initialized yet')
+  return apiActions.post(path, body)
 }
-async function mutateApi(path, method, body) {
-  const result = await rest(path, { method, body: body ? JSON.stringify(body) : undefined, headers: body ? { 'Content-Type': 'application/json' } : undefined })
-  await queryClient.invalidateQueries({ queryKey: ['gnos'] })
-  return result
+function mutateApi(path, method, body) {
+  if (!apiActions) throw new Error('gnos-learning-os: API actions not initialized yet')
+  return apiActions.mutate(path, method, body)
 }
 
 // Semantic status hues stay fixed regardless of theme (red = attention, green = mastered,
@@ -962,6 +962,7 @@ export default {
   description: 'GNOS Learning Dashboard — interface V1 para a jornada de estudos.',
   register(ctx) {
     restImpl = (path, opts) => ctx.rest(path, opts)
+    apiActions = createApiActions(rest, queryClient)
     osImpl = ctx.os
     ctx.registerMany([
       ...pages.map(([path, , , Component]) => ({
