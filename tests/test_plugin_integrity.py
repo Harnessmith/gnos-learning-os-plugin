@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import re
 import sys
 import unittest
@@ -140,6 +141,40 @@ class PluginIntegrityTests(unittest.TestCase):
                 ("session-lifecycle",),
             )
             self.assertEqual(cur.fetchone()["count"], 2)
+
+    def test_library_supports_folders_search_kind_and_pagination(self):
+        now = plugin_api._now()
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.schema}.courses "
+                "(id, title, sources_json, created_at, updated_at) VALUES (%s, %s, %s, %s, %s)",
+                (
+                    "course-library",
+                    "Biblioteca de testes",
+                    json.dumps({
+                        "docker": {"title": "Docker Docs", "url": "https://docs.docker.com"},
+                        "python": {"title": "Python Docs", "url": "https://docs.python.org"},
+                    }),
+                    now,
+                    now,
+                ),
+            )
+            cur.execute(
+                f"INSERT INTO {self.schema}.resources (id, type, title, detail, url, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                ("resource-library", "article", "Guia de revisão", "Docker e containers", "https://example.test", now),
+            )
+            conn.commit()
+        page = asyncio.run(plugin_api.list_library(page=1, page_size=1, folder_id="sources:course-library"))
+        self.assertEqual(page["total"], 2)
+        self.assertEqual(len(page["items"]), 1)
+        self.assertTrue(page["has_more"])
+        searched = asyncio.run(plugin_api.list_library(q="Docker", kind="source"))
+        self.assertEqual(searched["total"], 1)
+        self.assertEqual(searched["items"][0]["title"], "Docker Docs")
+        resources = asyncio.run(plugin_api.list_library(folder_id="resources:general", kind="resource"))
+        self.assertEqual(resources["total"], 1)
+        self.assertEqual(resources["items"][0]["id"], "resource-library")
 
     def test_session_notes_are_persisted_and_listed(self):
         note = asyncio.run(plugin_api.create_session_note("session-devops-active", plugin_api.SessionNoteBody(text="Revisar DNS")))
