@@ -6,6 +6,7 @@ import importlib
 import json
 import re
 import sys
+import tempfile
 import unittest
 import uuid
 from fastapi import HTTPException
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD_DIR = ROOT / "plugins" / "hermes-desktop" / "gnos-learning-os" / "dashboard"
 sys.path.insert(0, str(DASHBOARD_DIR))
 from services.recommendations import choose_next
+import sync_evidence
 plugin_api = importlib.import_module("plugin_api")
 
 
@@ -210,7 +212,51 @@ class PluginIntegrityTests(unittest.TestCase):
         result = asyncio.run(plugin_api.get_evidence_history("course:devops:dns"))
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["history"][0]["status"], "exposed")
-
+    def test_evidence_sync_is_idempotent_and_records_only_changes(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            evidence_dir = root / "learners" / "joao" / "evidence"
+            domain_dir = root / "domains" / "devops"
+            evidence_dir.mkdir(parents=True)
+            domain_dir.mkdir(parents=True)
+            (domain_dir / "domain.json").write_text(
+                json.dumps({"competencies": [{"id": "dns", "title": "DNS"}]}),
+                encoding="utf-8",
+            )
+            evidence_path = evidence_dir / "devops.json"
+            evidence_path.write_text(
+                json.dumps({"competencies": {"dns": {
+                    "status": "practicing",
+                    "attempts": 2,
+                    "last_reason": "Praticou resolução de nomes",
+                    "next_intervention": "Lab guiado",
+                    "last_evidence_at": "2026-09-27T10:00:00+00:00",
+                }}}),
+                encoding="utf-8",
+            )
+            first = sync_evidence.sync_learner_domain(root, "joao", "devops")
+            second = sync_evidence.sync_learner_domain(root, "joao", "devops")
+            self.assertEqual(first["inserted"], ["dns"])
+            self.assertEqual(second["updated"], ["dns"])
+            with plugin_api._connect() as conn, conn.cursor() as cur:
+                cur.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.evidence_history WHERE competency_id = %s", ("dns",))
+                self.assertEqual(cur.fetchone()["count"], 1)
+            evidence_path.write_text(
+                json.dumps({"competencies": {"dns": {
+                    "status": "demonstrated",
+                    "attempts": 3,
+                    "last_reason": "Demonstrou em exercício",
+                    "next_intervention": None,
+                    "last_evidence_at": "2026-09-27T11:00:00+00:00",
+                }}}),
+                encoding="utf-8",
+            )
+            sync_evidence.sync_learner_domain(root, "joao", "devops")
+            with plugin_api._connect() as conn, conn.cursor() as cur:
+                cur.execute(f"SELECT status FROM {self.schema}.evidence WHERE competency_id = %s", ("dns",))
+                self.assertEqual(cur.fetchone()["status"], "demonstrated")
+                cur.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.evidence_history WHERE competency_id = %s", ("dns",))
+                self.assertEqual(cur.fetchone()["count"], 2)
 
 if __name__ == "__main__":
     unittest.main()

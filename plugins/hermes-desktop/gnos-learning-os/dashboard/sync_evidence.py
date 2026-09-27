@@ -64,10 +64,33 @@ def sync_learner_domain(workspace_root: Path, learner: str, domain_id: str) -> d
                 label = titles.get(competency_id, competency_id)
                 misconceptions = [entry["misconception_id"]] if entry.get("misconception_id") else []
                 cur.execute(
-                    f"SELECT 1 FROM {plugin_api.SCHEMA}.evidence WHERE competency_id = %s",
+                    f"SELECT status, attempts, detail, misconceptions_json, next_intervention "
+                    f"FROM {plugin_api.SCHEMA}.evidence WHERE competency_id = %s",
                     (competency_id,),
                 )
-                exists = cur.fetchone() is not None
+                previous = cur.fetchone()
+                exists = previous is not None
+                next_status = entry.get("status", "unknown")
+                next_attempts = entry.get("attempts", 0)
+                next_detail = entry.get("last_reason")
+                next_misconceptions = json.dumps(misconceptions)
+                next_intervention = entry.get("next_intervention")
+                changed = not exists or (
+                    (
+                        previous["status"],
+                        previous["attempts"],
+                        previous["detail"],
+                        previous["misconceptions_json"],
+                        previous["next_intervention"],
+                    )
+                    != (
+                        next_status,
+                        next_attempts,
+                        next_detail,
+                        next_misconceptions,
+                        next_intervention,
+                    )
+                )
                 cur.execute(
                     f"""
                     INSERT INTO {plugin_api.SCHEMA}.evidence
@@ -94,12 +117,13 @@ def sync_learner_domain(workspace_root: Path, learner: str, domain_id: str) -> d
                     f"""
                     INSERT INTO {plugin_api.SCHEMA}.evidence_history
                         (id, competency_id, label, status, attempts, detail, recorded_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    SELECT %s, %s, %s, %s, %s, %s, %s
+                    WHERE %s
                     """,
                     (
                         f"history-{competency_id}-{uuid.uuid4().hex}", competency_id, label,
                         entry.get("status", "unknown"), entry.get("attempts", 0),
-                        entry.get("last_reason"), entry.get("last_evidence_at") or plugin_api._now(),
+                        entry.get("last_reason"), entry.get("last_evidence_at") or plugin_api._now(), changed,
                     ),
                 )
                 (updated if exists else inserted).append(competency_id)
