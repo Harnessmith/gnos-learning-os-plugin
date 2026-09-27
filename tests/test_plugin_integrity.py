@@ -123,6 +123,20 @@ class PluginIntegrityTests(unittest.TestCase):
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["items"][0]["status"], "repair-needed")
 
+    def test_evidence_history_returns_status_changes(self):
+        now = plugin_api._now()
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.schema}.evidence_history "
+                "(id, competency_id, label, status, attempts, detail, recorded_at) "
+                "VALUES ('history-1', 'course:devops:dns', 'DNS', 'exposed', 1, 'primeiro contato', %s)",
+                (now,),
+            )
+            conn.commit()
+        result = asyncio.run(plugin_api.get_evidence_history("course:devops:dns"))
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["history"][0]["status"], "exposed")
+
 
 if __name__ == "__main__":
     unittest.main()

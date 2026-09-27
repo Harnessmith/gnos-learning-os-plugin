@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,18 @@ def sync_learner_domain(workspace_root: Path, learner: str, domain_id: str) -> d
                         entry.get("attempts", 0), entry.get("last_reason"),
                         json.dumps(misconceptions), entry.get("next_intervention"),
                         0, entry.get("last_evidence_at") or plugin_api._now(),
+                    ),
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO {plugin_api.SCHEMA}.evidence_history
+                        (id, competency_id, label, status, attempts, detail, recorded_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        f"history-{competency_id}-{uuid.uuid4().hex}", competency_id, label,
+                        entry.get("status", "unknown"), entry.get("attempts", 0),
+                        entry.get("last_reason"), entry.get("last_evidence_at") or plugin_api._now(),
                     ),
                 )
                 (updated if exists else inserted).append(competency_id)

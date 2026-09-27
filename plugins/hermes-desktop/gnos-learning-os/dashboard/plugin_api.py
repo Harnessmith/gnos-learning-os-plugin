@@ -277,6 +277,16 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.evidence (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS {SCHEMA}.evidence_history (
+    id TEXT PRIMARY KEY,
+    competency_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    detail TEXT,
+    recorded_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS {SCHEMA}.resources (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
@@ -1016,6 +1026,18 @@ async def list_evidence():
         )
         rows = cur.fetchall()
     return {"evidence": [_evidence_dict(r) for r in rows]}
+
+
+@router.get("/evidence/{competency_id}/history")
+async def get_evidence_history(competency_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.evidence_history WHERE competency_id = %s ORDER BY recorded_at ASC",
+            (competency_id,),
+        )
+        history = [dict(row) for row in cur.fetchall()]
+    return {"competency_id": competency_id, "history": history, "total": len(history)}
 
 
 @router.get("/resources")
