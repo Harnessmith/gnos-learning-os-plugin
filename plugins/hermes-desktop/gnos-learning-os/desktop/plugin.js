@@ -340,6 +340,7 @@ function Today() {
   const { data: evidenceData } = useApi('/evidence', ['evidence'])
   const { data: timelineData } = useApi('/timeline', ['timeline'])
   const { data: labsData } = useApi('/labs', ['labs'])
+  const { data: nextStudyData } = useApi('/study/next', ['study-next'])
   const [busy, setBusy] = useState(false)
   const evidence = evidenceData?.evidence || []
   const timeline = timelineData?.actual?.length ? timelineData.actual : (timelineData?.planned || [])
@@ -371,6 +372,10 @@ function Today() {
             !timeline.length && jsxs('div', { children: [jsx('p', { style: { margin: '0 0 16px', lineHeight: 1.6, color: 'var(--muted-foreground)' }, children: data.next || 'Aguardando próxima intervenção' }), jsx(Navigate, { path: `${BASE}/progress`, icon: 'graph', children: 'Mapa de competências' })] })
           ] }) })
         ] }),
+        jsx(Card, { title: 'Próxima ação recomendada', icon: 'target', children: jsxs('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }, children: [
+          jsxs('div', { children: [jsx('strong', { style: { display: 'block', fontSize: 18 }, children: nextStudyData?.session?.planned_topic || nextStudyData?.competency?.label || 'Nenhuma ação pendente' }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: nextStudyData?.reason || 'Aguardando recomendação' })] }),
+          nextStudyData?.session?.id && jsx(Navigate, { path: `${BASE}/lesson`, primary: true, icon: 'arrow-right', children: 'Abrir estudo' })
+        ] }) }),
         jsxs('section', { style: css.grid, children: [
           jsx(Card, { title: 'Competências registradas', icon: 'symbol-class', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: evidence.length }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: 'nós com evidência' })] }) }),
           jsx(Card, { title: 'Demonstradas ou retidas', icon: 'verified', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: evidence.filter((item) => ['demonstrated', 'retained'].includes(item.status)).length }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: 'competências consolidadas' })] }) }),

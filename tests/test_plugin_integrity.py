@@ -7,6 +7,7 @@ import re
 import sys
 import unittest
 import uuid
+from fastapi import HTTPException
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,12 @@ class PluginIntegrityTests(unittest.TestCase):
                 ("track-domain-devops", "DevOps", "Junior -> Pleno", "practicing", "real", now, now),
             )
             cur.execute(
+                f"INSERT INTO {self.schema}.sessions "
+                "(id, track_id, kind, planned_topic, planned_date, status, created_at, updated_at) "
+                "VALUES ('session-devops-active', 'track-domain-devops', 'lesson', 'Sessão ativa', %s, 'in_progress', %s, %s)",
+                (now[:10], now, now),
+            )
+            cur.execute(
                 f"INSERT INTO {self.schema}.timeline_entries "
                 "(id, session_id, source, entry_date, kind, text, adaptive_reason, created_at) "
                 "VALUES (%s, NULL, 'planned', %s, %s, %s, NULL, %s)",
@@ -61,6 +68,39 @@ class PluginIntegrityTests(unittest.TestCase):
         result = asyncio.run(plugin_api.get_timeline())
         entries = result["planned"] + result["actual"]
         self.assertIn("timeline-devops-orphan", {entry["id"] for entry in entries})
+
+    def test_next_study_prioritizes_active_session(self):
+        result = asyncio.run(plugin_api.get_next_study())
+        self.assertEqual(result["kind"], "session")
+        self.assertEqual(result["session"]["id"], "session-devops-active")
+
+    def test_course_track_cannot_be_deleted(self):
+        now = plugin_api._now()
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.schema}.tracks "
+                "(id, title, stage, status, source_type, detail, competencies_json, created_at, updated_at) "
+                "VALUES ('track-course-protected', 'Curso', 'base', 'unknown', 'course', 'x', '[]', %s, %s)",
+                (now, now),
+            )
+            conn.commit()
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(plugin_api.delete_track("track-course-protected"))
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_planned_session_cannot_be_completed_directly(self):
+        now = plugin_api._now()
+        with plugin_api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.schema}.sessions "
+                "(id, track_id, kind, planned_topic, planned_date, status, created_at, updated_at) "
+                "VALUES ('session-planned-only', 'track-domain-devops', 'lesson', 'Aula', %s, 'planned', %s, %s)",
+                (now[:10], now, now),
+            )
+            conn.commit()
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(plugin_api.complete_session("session-planned-only", plugin_api.SessionCompleteBody()))
+        self.assertEqual(ctx.exception.status_code, 409)
 
 
 if __name__ == "__main__":

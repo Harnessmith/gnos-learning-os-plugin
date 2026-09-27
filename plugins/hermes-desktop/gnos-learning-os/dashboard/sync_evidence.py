@@ -164,17 +164,19 @@ def sync_track_and_timeline(workspace_root: Path, learner: str, domain_id: str) 
             cur.execute(
                 f"""
                 INSERT INTO {plugin_api.SCHEMA}.tracks
-                    (id, title, stage, status, detail, competencies_json, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (id, title, stage, status, source_type, source_id, detail, competencies_json, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, 'domain', %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     title = EXCLUDED.title,
                     stage = EXCLUDED.stage,
                     status = EXCLUDED.status,
+                    source_type = EXCLUDED.source_type,
+                    source_id = EXCLUDED.source_id,
                     detail = EXCLUDED.detail,
                     competencies_json = EXCLUDED.competencies_json,
                     updated_at = EXCLUDED.updated_at
                 """,
-                (track_id, meta["title"], stage, status, detail,
+                (track_id, meta["title"], stage, status, domain_id, detail,
                  json.dumps(competency_ids), now, now),
             )
 
@@ -319,15 +321,17 @@ def sync_lesson_session(workspace_root: Path, learner: str, course_id: str,
             cur.execute(
                 f"""
                 INSERT INTO {plugin_api.SCHEMA}.tracks
-                    (id, title, stage, status, detail, competencies_json, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (id, title, stage, status, source_type, source_id, detail, competencies_json, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, 'course', %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     title = EXCLUDED.title, stage = EXCLUDED.stage,
-                    status = EXCLUDED.status, detail = EXCLUDED.detail,
+                    status = EXCLUDED.status, source_type = EXCLUDED.source_type,
+                    source_id = EXCLUDED.source_id, detail = EXCLUDED.detail,
+                    competencies_json = EXCLUDED.competencies_json,
                     updated_at = EXCLUDED.updated_at
                 """,
                 (track_id, course.get("title", course_id), course.get("depth", "working"),
-                 "practicing", lesson["title"], json.dumps(lesson.get("concepts", [])), now, now),
+                 "practicing", course_id, lesson["title"], json.dumps(lesson.get("concepts", [])), now, now),
             )
             cur.execute(
                 f"""

@@ -183,6 +183,8 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.tracks (
     title TEXT NOT NULL,
     stage TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'unknown',
+    source_type TEXT NOT NULL DEFAULT 'user',
+    source_id TEXT,
     detail TEXT,
     competencies_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
@@ -212,6 +214,8 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.sessions (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE {SCHEMA}.tracks ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE {SCHEMA}.tracks ADD COLUMN IF NOT EXISTS source_id TEXT;
 ALTER TABLE {SCHEMA}.sessions ADD COLUMN IF NOT EXISTS portal_path TEXT;
 
 -- Append-only. A reschedule/repair NEVER updates an existing row; it only
@@ -602,6 +606,36 @@ def _lab_dict(row: dict) -> dict:
 async def health():
     _ensure_seeded()
     return {"ok": True}
+
+
+@router.get("/study/next")
+async def get_next_study():
+    """Return the highest-priority next action for the personal learner."""
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.sessions "
+            "WHERE status = 'in_progress' ORDER BY updated_at DESC LIMIT 1"
+        )
+        active = cur.fetchone()
+        if active:
+            session = _session_dict(active)
+            return {"kind": "session", "reason": "sessão em andamento", "session": session}
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.evidence "
+            "WHERE status = 'repair-needed' ORDER BY updated_at ASC LIMIT 1"
+        )
+        repair = cur.fetchone()
+        if repair:
+            return {"kind": "repair", "reason": "competência precisa de reparo", "competency": _evidence_dict(repair)}
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.sessions "
+            "WHERE status = 'planned' ORDER BY planned_date ASC, updated_at ASC LIMIT 1"
+        )
+        planned = cur.fetchone()
+    if planned:
+        return {"kind": "lesson", "reason": "próxima sessão planejada", "session": _session_dict(planned)}
+    return {"kind": "empty", "reason": "nenhuma ação pendente"}
 
 
 @router.get("/today")
@@ -1140,10 +1174,14 @@ async def update_track(track_id: str, body: TrackUpdateBody):
     assignments = ", ".join(f"{name} = %s" for name in fields)
     values = list(fields.values()) + [track_id]
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"UPDATE {SCHEMA}.tracks SET {assignments} WHERE id = %s RETURNING *", values)
+        cur.execute(f"SELECT source_type FROM {SCHEMA}.tracks WHERE id = %s", (track_id,))
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="track not found")
+        if row["source_type"] != "user":
+            raise HTTPException(status_code=409, detail="trilhas sincronizadas não podem ser editadas diretamente")
+        cur.execute(f"UPDATE {SCHEMA}.tracks SET {assignments} WHERE id = %s RETURNING *", values)
+        row = cur.fetchone()
         conn.commit()
     return {"track": _track_dict(row)}
 
@@ -1152,9 +1190,12 @@ async def update_track(track_id: str, body: TrackUpdateBody):
 async def delete_track(track_id: str):
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT id FROM {SCHEMA}.tracks WHERE id = %s", (track_id,))
-        if cur.fetchone() is None:
+        cur.execute(f"SELECT source_type FROM {SCHEMA}.tracks WHERE id = %s", (track_id,))
+        row = cur.fetchone()
+        if row is None:
             raise HTTPException(status_code=404, detail="track not found")
+        if row["source_type"] != "user":
+            raise HTTPException(status_code=409, detail="trilhas sincronizadas não podem ser apagadas")
         cur.execute(f"DELETE FROM {SCHEMA}.tracks WHERE id = %s", (track_id,))
         conn.commit()
     return {"deleted": track_id}
@@ -1229,6 +1270,10 @@ async def complete_session(session_id: str, body: SessionCompleteBody):
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="session not found")
+        if row["status"] == "planned":
+            raise HTTPException(status_code=409, detail="inicie a sessão antes de concluí-la")
+        if row["status"] == "completed":
+            return _session_dict(row)
         actual_topic = body.actual_topic or row["actual_topic"] or row["planned_topic"]
         cur.execute(
             f"UPDATE {SCHEMA}.sessions SET status = 'completed', actual_date = %s, actual_topic = %s, "
