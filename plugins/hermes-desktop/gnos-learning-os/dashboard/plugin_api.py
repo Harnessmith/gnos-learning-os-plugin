@@ -41,6 +41,7 @@ import os
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import psycopg
@@ -62,6 +63,46 @@ VALID_COMPETENCY_STATES = (
 )
 
 SCHEMA = "gnos_learning_os"
+
+# Root of the Didaktos profile workspace where portals are rendered
+# (learners/<learner>/courses/<course-id>/portal/index.html). The desktop
+# renderer never gets a filesystem path: it always fetches portal HTML
+# through the routes below, which read the file on THIS host (the gateway
+# process) and hand back the markup over the same connection (local or
+# remote/SSH) the rest of the plugin API already uses. `file://<server-path>`
+# only ever resolves on the machine that has that path, which is this
+# server, never the user's local Electron process — that mismatch is why the
+# previous "open in OS browser" approach was silently broken for any
+# non-local gateway connection.
+WORKSPACE_ROOT = Path(
+    os.environ.get(
+        "DIDAKTOS_WORKSPACE_ROOT",
+        os.path.expanduser("~/.hermes/profiles/didaktos/workspace"),
+    )
+).resolve()
+
+
+def _read_portal_html(portal_path: Optional[str]) -> str:
+    """Resolve and read a portal `index.html`, refusing anything outside
+    WORKSPACE_ROOT/learners/.../portal/ (defence in depth: portal_path is
+    server-written by sync_evidence.py, never client-supplied, but a route
+    must not trust a stored path blindly either)."""
+    if not portal_path:
+        raise HTTPException(status_code=404, detail="no portal rendered for this lesson yet")
+    try:
+        resolved = Path(portal_path).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail="invalid portal path") from exc
+    allowed_root = WORKSPACE_ROOT / "learners"
+    if allowed_root not in resolved.parents and resolved != allowed_root:
+        log.warning("refusing portal path outside workspace: %s", resolved)
+        raise HTTPException(status_code=404, detail="portal not found")
+    if resolved.name != "index.html" or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="portal not found")
+    try:
+        return resolved.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="portal not found") from exc
 
 
 def _conninfo() -> str:
@@ -645,6 +686,24 @@ async def get_session(session_id: str):
     return _session_dict(row)
 
 
+@router.get("/sessions/{session_id}/portal")
+async def get_session_portal(session_id: str):
+    """Full rendered lesson HTML (diagrams, KaTeX, highlighted code) for the
+    'Ver aula completa' button. Returned as JSON `{html: str}` so the
+    desktop renderer can embed it via `<SandboxedFrame src="data:text/html;..."
+    />` instead of trying to open a server-local filesystem path in the
+    user's OS browser (which only works when gateway and Electron share a
+    filesystem — never true for a remote/SSH connection)."""
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT portal_path FROM {SCHEMA}.sessions WHERE id = %s", (session_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    html = _read_portal_html(row.get("portal_path"))
+    return {"html": html}
+
+
 def _course_dict(row: dict) -> dict:
     return {
         "id": row["id"],
@@ -725,6 +784,24 @@ async def get_course(course_id: str):
         )
         artifacts = [_course_artifact_dict(r) for r in cur.fetchall()]
     return {**_course_dict(course_row), "lessons": lessons, "artifacts": artifacts}
+
+
+@router.get("/courses/{course_id}/lessons/{lesson_id}/portal")
+async def get_course_lesson_portal(course_id: str, lesson_id: str):
+    """Same contract as `/sessions/{id}/portal`, for lessons reached via the
+    Trilha screen's course/module drill-down (CourseExplorer) rather than
+    the daily session picker. Both tables carry their own `portal_path`
+    written by sync_evidence.py at publish time."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT portal_path FROM {SCHEMA}.course_lessons WHERE course_id = %s AND id = %s",
+            (course_id, lesson_id),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="lesson not found")
+    html = _read_portal_html(row.get("portal_path"))
+    return {"html": html}
 
 
 @router.get("/assessments")

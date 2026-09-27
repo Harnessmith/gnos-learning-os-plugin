@@ -6,7 +6,7 @@
 // plugin's own backend at /api/plugins/gnos-learning-os/* (see ../dashboard/plugin_api.py)
 // via ctx.rest. No page reads GNOS course files, learner state, or executes shell —
 // see ../contracts.md for the full contract.
-import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClient } from '@hermes/plugin-sdk'
+import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClient, Dialog, DialogContent, DialogHeader, DialogTitle, SandboxedFrame } from '@hermes/plugin-sdk'
 import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
@@ -21,14 +21,33 @@ function rest(path, opts) {
   return restImpl(path, opts)
 }
 
-// Opens the full rendered lesson (portal/index.html — diagrams, KaTeX,
-// highlighted code) in the OS default browser. `session.portal_path` is an
-// absolute filesystem path set by sync_evidence.py when the course has a
-// rendered portal; missing/undefined means the course was never rendered.
-async function openPortal(portalPath) {
-  if (!osImpl || !portalPath) return false
-  const url = 'file://' + portalPath.split('/').map(encodeURIComponent).join('/')
-  return osImpl.openExternal(url)
+// Modal that renders portal HTML inside a sandboxed iframe via a `data:`
+// URL (btoa/unescape/encodeURIComponent round-trip keeps pt-BR accents
+// intact) — the SDK's SandboxedFrame only accepts http(s)/data: sources.
+function PortalDialog({ open, onOpenChange, title, kind, ids }) {
+  const { data, isLoading, error } = useApi(open ? (kind === 'session' ? `/sessions/${ids.sessionId}/portal` : `/courses/${ids.courseId}/lessons/${ids.lessonId}/portal`) : null, ['portal', kind, ids.sessionId || `${ids.courseId}/${ids.lessonId}`])
+  const html = data && typeof data === 'object' && 'html' in data ? data.html : (typeof data === 'string' ? data : null)
+  const dataUrl = html ? `data:text/html;base64,${btoa(unescape(encodeURIComponent(html)))}` : null
+  return jsx(Dialog, {
+    open, onOpenChange,
+    children: jsxs(DialogContent, {
+      className: 'gnos-portal-dialog',
+      style: { width: '90vw', maxWidth: 1100, height: '86vh', padding: 0, display: 'flex', flexDirection: 'column' },
+      children: [
+        jsx(DialogHeader, { style: { padding: '16px 20px 0' }, children: jsx(DialogTitle, { children: title || 'Aula completa' }) }),
+        jsx('div', {
+          style: { flex: 1, minHeight: 0, padding: '12px 20px 20px' },
+          children: isLoading
+            ? jsx(Loading, { label: 'conteúdo da aula' })
+            : error
+              ? jsx(ErrorState, { label: 'conteúdo da aula', error })
+              : dataUrl
+                ? jsx(SandboxedFrame, { src: dataUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)' } })
+                : jsx(Empty, { label: 'conteúdo renderizado' })
+        })
+      ]
+    })
+  })
 }
 
 // Renders the light markdown lesson-design writes into block `text`/`code`:
@@ -81,6 +100,7 @@ async function postApi(path, body) {
 
 // Semantic status hues stay fixed regardless of theme (red = attention, green = mastered,
 // amber = in progress, blue = introduced); the rest follows the supplied GNOS palette.
+
 const statusTone = { unknown: 'muted', exposed: 'blue', practicing: 'amber', demonstrated: 'green', retained: 'green', 'repair-needed': 'red', planned: 'muted', corrected: 'amber', in_progress: 'amber', completed: 'green', not_started: 'muted', running: 'amber', ready_to_check: 'amber', passed: 'green', failed: 'red' }
 const toneHex = { muted: null, blue: '#2f6fed', amber: '#c2760c', green: '#1a9c5c', red: '#e5484d' }
 const kindIcon = { lesson: 'book', lab: 'beaker', review: 'history', retrieval: 'question', checkpoint: 'checklist', exam: 'mortar-board', project: 'project', challenge: 'zap', repair: 'tools' }
@@ -377,10 +397,15 @@ function Tracks() {
 
 const artifactIcon = { video: 'device-camera-video', diagram: 'type-hierarchy', simulation: 'pulse', pdf: 'file-pdf', image: 'file-media', document: 'file-text' }
 
+// Only real http(s) URLs are safe to hand to host.openExternal from a
+// possibly-remote gateway: a `location.path` is a server-local filesystem
+// path (same class of bug as the old openPortal) and would silently fail to
+// open on the user's machine, so it deliberately does NOT synthesize a
+// file:// URL — an artifact with only a local path has no external action
+// until it's served through the plugin API like the lesson portal is.
 function artifactHref(location) {
   if (!location) return null
-  if (location.url) return location.url
-  if (location.path) return 'file://' + location.path.split('/').map(encodeURIComponent).join('/')
+  if (location.url && /^https?:\/\//i.test(location.url)) return location.url
   return null
 }
 
@@ -388,6 +413,8 @@ function CourseExplorer({ courseId, onClose }) {
   const { data, isLoading, error } = useApi(`/courses/${courseId}`, ['course', courseId])
   const [openTopic, setOpenTopic] = useState(null)
   const [openLesson, setOpenLesson] = useState(null)
+  const [portalOpen, setPortalOpen] = useState(false)
+  const [portalLesson, setPortalLesson] = useState(null)
   if (isLoading) return jsx(Card, { title: 'Carregando curso…', children: jsx(Loading, { label: 'curso' }) })
   if (error) return jsx(Card, { title: 'Curso', children: jsx(ErrorState, { label: 'curso', error }) })
   const course = data
@@ -501,7 +528,7 @@ function CourseExplorer({ courseId, onClose }) {
                                       }, a.id))
                                     ]
                                   }),
-                                  lesson.portal_path && jsx(Navigate, { primary: true, icon: 'link-external', onClick: () => openPortal(lesson.portal_path), children: 'Ver aula completa (com diagramas e código)' })
+                                  lesson.portal_path && jsx(Navigate, { primary: true, icon: 'link-external', onClick: () => { setPortalLesson(lesson); setPortalOpen(true) }, children: 'Ver aula completa (com diagramas e código)' })
                                 ]
                               })
                             ]
@@ -521,6 +548,13 @@ function CourseExplorer({ courseId, onClose }) {
             ]
           }, chapter.id))
         })
+      }),
+      portalOpen && jsx(PortalDialog, {
+        open: portalOpen,
+        onOpenChange: setPortalOpen,
+        title: portalLesson?.title,
+        kind: 'course',
+        ids: { courseId, lessonId: portalLesson?.id }
       })
     ]
   })
@@ -543,6 +577,7 @@ function Lesson() {
   const sessionId = selectedId || today?.session_id
   const { data: session, isLoading: isLoadingSession } = useApi(sessionId ? `/sessions/${sessionId}` : null, ['session', sessionId])
   const [busy, setBusy] = useState(false)
+  const [portalOpen, setPortalOpen] = useState(false)
   const changeStatus = async (kind) => {
     setBusy(true)
     try {
@@ -572,24 +607,30 @@ function Lesson() {
     session.status === 'planned' && jsx(Navigate, { primary: true, icon: 'play', onClick: () => changeStatus('start'), children: busy ? 'Iniciando…' : 'Iniciar aula' }),
     session.status === 'in_progress' && jsx(Navigate, { primary: true, icon: 'check', onClick: () => changeStatus('complete'), children: busy ? 'Concluindo…' : 'Concluir aula' }),
     session.portal_path && jsx(Navigate, {
-      icon: 'browser', onClick: async () => {
-        const opened = await openPortal(session.portal_path)
-        if (!opened) host.toast?.('Não foi possível abrir o conteúdo completo (portal ausente ou navegador indisponível).', 'error')
-      }, children: 'Ver conteúdo completo'
+      icon: 'browser', onClick: () => setPortalOpen(true), children: 'Ver conteúdo completo'
     }),
     jsx(Navigate, { path: `${BASE}/lab`, icon: 'beaker', children: 'Abrir laboratório' })
   ] })
-  return jsx(Page, {
-    label: session.teacher, title: session.actual_topic || session.planned_topic, subtitle: session.objective, actions,
-    children: jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 286px', gap: 16 }, children: [
-      jsx('section', { style: { display: 'grid', gap: 14 }, children: (session.blocks || []).map(([type, body], index) => jsx(Card, { title: type, icon: blockIcon[type] || 'symbol-misc', children: ['Código', 'Diagrama', 'Equação'].includes(type) ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body }) }, `${type}-${index}`)) }),
-      jsx('aside', { children: jsxs('div', { style: { position: 'sticky', top: 16, display: 'grid', gap: 14 }, children: [
-        jsx(Card, { title: 'Estado da sessão', icon: 'pulse', children: jsxs('div', { children: [jsx(Badge, { state: session.status, children: session.status }), jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: `${session.planned_duration || '—'} minutos planejados` })] }) }),
-        jsx(Card, { title: 'Próximo passo', icon: 'arrow-swap', children: jsx('p', { style: { margin: 0, lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: session.next_step || 'Aguardando conclusão da aula' }) }),
-        jsx(Navigate, { path: `${BASE}/resources`, icon: 'references', children: 'Recursos da sessão' })
-      ] }) })
-    ] })
-  })
+  return jsxs('div', { children: [
+    jsx(Page, {
+      label: session.teacher, title: session.actual_topic || session.planned_topic, subtitle: session.objective, actions,
+      children: jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 286px', gap: 16 }, children: [
+        jsx('section', { style: { display: 'grid', gap: 14 }, children: (session.blocks || []).map(([type, body], index) => jsx(Card, { title: type, icon: blockIcon[type] || 'symbol-misc', children: ['Código', 'Diagrama', 'Equação'].includes(type) ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body }) }, `${type}-${index}`)) }),
+        jsx('aside', { children: jsxs('div', { style: { position: 'sticky', top: 16, display: 'grid', gap: 14 }, children: [
+          jsx(Card, { title: 'Estado da sessão', icon: 'pulse', children: jsxs('div', { children: [jsx(Badge, { state: session.status, children: session.status }), jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: `${session.planned_duration || '—'} minutos planejados` })] }) }),
+          jsx(Card, { title: 'Próximo passo', icon: 'arrow-swap', children: jsx('p', { style: { margin: 0, lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: session.next_step || 'Aguardando conclusão da aula' }) }),
+          jsx(Navigate, { path: `${BASE}/resources`, icon: 'references', children: 'Recursos da sessão' })
+        ] }) })
+      ] })
+    }),
+    portalOpen && jsx(PortalDialog, {
+      open: portalOpen,
+      onOpenChange: setPortalOpen,
+      title: session.actual_topic || session.planned_topic,
+      kind: 'session',
+      ids: { sessionId }
+    })
+  ] })
 }
 function TerminalChrome({ children }) {
   return jsxs('div', {
