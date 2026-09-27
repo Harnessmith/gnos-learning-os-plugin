@@ -303,6 +303,15 @@ def sync_lesson_session(workspace_root: Path, learner: str, course_id: str,
     session_id = f"session-{course_id}-{lesson_id}"
     next_step = (course.get("current") or {}).get("next_step")
 
+    # The full rendered lesson (diagrams, animations, simulations, KaTeX,
+    # highlighted code) lives in the course's static portal, not in
+    # `blocks_json` — media blocks there only carry a caption (see
+    # `_lesson_block_to_pair`). Record the portal's absolute path so the
+    # Aula screen can open it directly, when the course has been rendered.
+    base = workspace_root / "learners" / learner / "courses" / course_id
+    portal_index = base / "portal" / "index.html"
+    portal_path = str(portal_index) if portal_index.exists() else None
+
     plugin_api._ensure_schema()
     with plugin_api._connect() as conn:
         with conn.cursor() as cur:
@@ -326,21 +335,21 @@ def sync_lesson_session(workspace_root: Path, learner: str, course_id: str,
                     (id, track_id, kind, planned_topic, actual_topic, planned_date, actual_date,
                      planned_duration, actual_duration, objectives_json, activities_json,
                      objective, teacher, blocks_json, status, started_at, completed_at,
-                     next_step, created_at, updated_at)
+                     next_step, portal_path, created_at, updated_at)
                 VALUES (%s, %s, 'lesson', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        'in_progress', %s, NULL, %s, %s, %s)
+                        'in_progress', %s, NULL, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     actual_topic = EXCLUDED.actual_topic, actual_date = EXCLUDED.actual_date,
                     objective = EXCLUDED.objective, teacher = EXCLUDED.teacher,
                     blocks_json = EXCLUDED.blocks_json, next_step = EXCLUDED.next_step,
-                    updated_at = EXCLUDED.updated_at
+                    portal_path = EXCLUDED.portal_path, updated_at = EXCLUDED.updated_at
                 """,
                 (session_id, track_id, lesson["title"], lesson["title"],
                  updated_date, updated_date, None, None,
                  json.dumps([lesson["purpose"]]),
                  json.dumps(["leitura", "exercicio"] if exercises_by_id else ["leitura"]),
                  lesson["purpose"], teacher, json.dumps(blocks),
-                 now, next_step, now, now),
+                 now, next_step, portal_path, now, now),
             )
 
             # Course bibliography is the source of truth for the Resources
@@ -427,6 +436,114 @@ def sync_lesson_session(workspace_root: Path, learner: str, course_id: str,
             "session_id": session_id, "track_id": track_id, "blocks_synced": len(blocks)}
 
 
+def sync_course_catalog(workspace_root: Path, learner: str, course_id: str) -> dict[str, Any]:
+    """Sync the full course plan (chapters/topics), every lesson published
+    under it (any publication status, not just 'ready' — a draft still
+    belongs in the syllabus tree so the learner can see what's coming), and
+    the course's artifact manifest (videos, diagrams, simulations, PDFs)
+    into `courses` / `course_lessons` / `course_artifacts`.
+
+    This is the data behind the Trilha screen's Curso -> Capítulo -> Tópico
+    -> Aula -> Exercícios/Artefatos drill-down and the course syllabus view
+    (`sync_lesson_session` above only ever syncs one lesson as a 'today'
+    session; this syncs the whole course tree at once).
+    """
+    if not re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", learner):
+        raise ValueError(f"invalid learner slug: {learner!r}")
+    base = workspace_root / "learners" / learner / "courses" / course_id
+    course_path = base / "course.json"
+    if not course_path.exists():
+        raise FileNotFoundError(f"no course file at {course_path}")
+    course = json.loads(course_path.read_text(encoding="utf-8"))
+
+    manifest_path = base / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"artifacts": []}
+
+    lessons_dir = base / "lessons"
+    lesson_files = sorted(lessons_dir.glob("*/lesson.json")) if lessons_dir.is_dir() else []
+
+    plugin_api._ensure_schema()
+    now = plugin_api._now()
+    synced_lessons: list[str] = []
+    synced_artifacts: list[str] = []
+    with plugin_api._connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {plugin_api.SCHEMA}.courses
+                    (id, title, goal, vision, depth, length, chapters_json, sources_json,
+                     created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    title = EXCLUDED.title, goal = EXCLUDED.goal, vision = EXCLUDED.vision,
+                    depth = EXCLUDED.depth, length = EXCLUDED.length,
+                    chapters_json = EXCLUDED.chapters_json, sources_json = EXCLUDED.sources_json,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (course_id, course.get("title", course_id), course.get("goal"),
+                 course.get("vision"), course.get("depth"), course.get("length"),
+                 json.dumps(course.get("chapters", [])), json.dumps(course.get("sources", {})),
+                 now, now),
+            )
+
+            for lesson_path in lesson_files:
+                lesson = json.loads(lesson_path.read_text(encoding="utf-8"))
+                lesson_id = lesson["id"]
+                exercises_by_id = {e["id"]: e for e in lesson.get("exercises", [])}
+                blocks = [_lesson_block_to_pair(b, exercises_by_id) for b in lesson.get("blocks", [])]
+                portal_index = base / "portal" / "index.html"
+                portal_path = str(portal_index) if portal_index.exists() else None
+                cur.execute(
+                    f"""
+                    INSERT INTO {plugin_api.SCHEMA}.course_lessons
+                        (id, course_id, chapter_id, topic_id, title, purpose, teacher,
+                         concepts_json, blocks_json, exercises_json, publication,
+                         portal_path, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (course_id, id) DO UPDATE SET
+                        chapter_id = EXCLUDED.chapter_id, topic_id = EXCLUDED.topic_id,
+                        title = EXCLUDED.title, purpose = EXCLUDED.purpose,
+                        teacher = EXCLUDED.teacher, concepts_json = EXCLUDED.concepts_json,
+                        blocks_json = EXCLUDED.blocks_json, exercises_json = EXCLUDED.exercises_json,
+                        publication = EXCLUDED.publication, portal_path = EXCLUDED.portal_path,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (lesson_id, course_id, lesson.get("chapter_id"), lesson.get("topic_id"),
+                     lesson["title"], lesson.get("purpose"), lesson.get("teacher"),
+                     json.dumps(lesson.get("concepts", [])), json.dumps(blocks),
+                     json.dumps(lesson.get("exercises", [])), lesson.get("publication", "draft"),
+                     portal_path, lesson.get("updated_at") or now),
+                )
+                synced_lessons.append(lesson_id)
+
+            for artifact in manifest.get("artifacts", []):
+                artifact_id = artifact["id"]
+                cur.execute(
+                    f"""
+                    INSERT INTO {plugin_api.SCHEMA}.course_artifacts
+                        (id, course_id, chapter_id, topic_id, lesson_id, type, title,
+                         purpose, location_json, mime_type, status, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (course_id, id) DO UPDATE SET
+                        chapter_id = EXCLUDED.chapter_id, topic_id = EXCLUDED.topic_id,
+                        lesson_id = EXCLUDED.lesson_id, type = EXCLUDED.type,
+                        title = EXCLUDED.title, purpose = EXCLUDED.purpose,
+                        location_json = EXCLUDED.location_json, mime_type = EXCLUDED.mime_type,
+                        status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
+                    """,
+                    (artifact_id, course_id, artifact.get("chapter_id"), artifact.get("topic_id"),
+                     artifact.get("lesson_id"), artifact["type"], artifact["title"],
+                     artifact.get("purpose"), json.dumps(artifact.get("location", {})),
+                     artifact.get("mime_type"), artifact.get("status", "draft"),
+                     artifact.get("updated_at") or now),
+                )
+                synced_artifacts.append(artifact_id)
+        conn.commit()
+
+    return {"learner": learner, "course_id": course_id,
+            "lessons_synced": synced_lessons, "artifacts_synced": synced_artifacts}
+
+
 def sync_all(workspace_root: Path, learner: str, domain_id: str) -> dict[str, Any]:
     """Run every available sync for one learner/domain pair. Each half is
     independent and best-effort: a missing evidence or schedule file (the
@@ -457,7 +574,7 @@ def main() -> int:
     ap.add_argument("--domain-id")
     ap.add_argument("--course-id")
     ap.add_argument("--lesson-id")
-    ap.add_argument("--what", choices=["evidence", "timeline", "session", "all"], default="all")
+    ap.add_argument("--what", choices=["evidence", "timeline", "session", "course", "all"], default="all")
     args = ap.parse_args()
 
     try:
@@ -471,6 +588,11 @@ def main() -> int:
                       file=sys.stderr)
                 return 1
             summary = sync_lesson_session(args.workspace_root, args.learner, args.course_id, args.lesson_id)
+        elif args.what == "course":
+            if not args.course_id:
+                print(json.dumps({"error": "--what course requires --course-id"}), file=sys.stderr)
+                return 1
+            summary = sync_course_catalog(args.workspace_root, args.learner, args.course_id)
         else:
             summary = sync_all(args.workspace_root, args.learner, args.domain_id)
     except (FileNotFoundError, ValueError) as exc:

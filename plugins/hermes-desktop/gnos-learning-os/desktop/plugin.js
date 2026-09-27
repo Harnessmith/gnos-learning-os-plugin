@@ -12,12 +12,56 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 
 const BASE = '/gnos'
 let restImpl = null
+let osImpl = null
 
 // ctx.registerMany() runs once at activate() time; useApi/postApi are called
 // later from render/handlers, so we stash the bound ctx.rest reference here.
 function rest(path, opts) {
   if (!restImpl) throw new Error('gnos-learning-os: backend not initialized yet')
   return restImpl(path, opts)
+}
+
+// Opens the full rendered lesson (portal/index.html — diagrams, KaTeX,
+// highlighted code) in the OS default browser. `session.portal_path` is an
+// absolute filesystem path set by sync_evidence.py when the course has a
+// rendered portal; missing/undefined means the course was never rendered.
+async function openPortal(portalPath) {
+  if (!osImpl || !portalPath) return false
+  const url = 'file://' + portalPath.split('/').map(encodeURIComponent).join('/')
+  return osImpl.openExternal(url)
+}
+
+// Renders the light markdown lesson-design writes into block `text`/`code`:
+// **bold**, blank-line paragraphs, and `- ` bullet lists. Deliberately not a
+// full markdown engine — matches exactly what skills/lesson-design produces
+// (see lesson-contract.md's "Output text rules"), nothing more.
+function inlineMarkdown(line) {
+  const parts = line.split(/(\*\*[^*]+\*\*)/g).filter((part) => part !== '')
+  return parts.map((part, index) => part.startsWith('**') && part.endsWith('**') && part.length > 3
+    ? jsx('strong', { children: part.slice(2, -2) }, index)
+    : jsx('span', { children: part }, index))
+}
+function RichText({ text }) {
+  const raw = text == null ? '' : String(text)
+  if (!raw.trim()) return null
+  const paragraphs = raw.split(/\n\s*\n/).map((chunk) => chunk.trim()).filter(Boolean)
+  return jsx('div', {
+    style: { display: 'grid', gap: 12 },
+    children: paragraphs.map((paragraph, pIndex) => {
+      const lines = paragraph.split('\n').map((line) => line.trim()).filter(Boolean)
+      const isList = lines.length > 0 && lines.every((line) => /^[-•]\s+/.test(line))
+      if (isList) {
+        return jsx('ul', {
+          style: { margin: 0, paddingLeft: 20, display: 'grid', gap: 6 },
+          children: lines.map((line, lIndex) => jsx('li', { style: { lineHeight: 1.65, fontSize: 14 }, children: inlineMarkdown(line.replace(/^[-•]\s+/, '')) }, lIndex))
+        }, pIndex)
+      }
+      return jsx('p', {
+        style: { margin: 0, lineHeight: 1.7, fontSize: 14 },
+        children: lines.map((line, lIndex) => jsxs('span', { children: [inlineMarkdown(line), lIndex < lines.length - 1 ? jsx('br', {}) : null] }, lIndex))
+      }, pIndex)
+    })
+  })
 }
 
 function useApi(path, queryKey, opts = {}) {
@@ -289,8 +333,197 @@ function Today() {
 }
 function Tracks() {
   const { data, isLoading, error } = useApi('/tracks', ['tracks'])
+  const { data: coursesData } = useApi('/courses', ['courses'])
   const tracks = data?.tracks || []
-  return jsx(Page, { label: 'Áreas instaladas', title: 'Trilhas por competência', subtitle: 'O estado descreve evidência de aprendizagem — não apenas um percentual acumulado.', children: isLoading ? jsx(Loading, { label: 'trilhas' }) : error ? jsx(ErrorState, { label: 'trilhas', error }) : !tracks.length ? jsx(Empty, { label: 'trilhas' }) : jsx('div', { style: css.grid, children: tracks.map((t) => jsx(Card, { title: t.title, icon: 'library', children: jsxs('div', { children: [jsx('div', { style: { color: 'var(--muted-foreground)', marginBottom: 12, fontSize: 13 }, children: t.stage }), jsx(Badge, { state: t.status, children: t.status }), jsx('p', { style: { marginBottom: 0, marginTop: 12, color: 'var(--muted-foreground)', fontSize: 13, lineHeight: 1.5 }, children: t.detail })] }) }, t.id)) }) })
+  const courses = coursesData?.courses || []
+  const [openCourseId, setOpenCourseId] = useState(null)
+  const courseIdForTrack = (trackId) => trackId?.startsWith('track-course-') ? trackId.slice('track-course-'.length) : null
+  return jsx(Page, {
+    label: 'Áreas instaladas', title: 'Trilhas por competência',
+    subtitle: 'O estado descreve evidência de aprendizagem — não apenas um percentual acumulado.',
+    children: isLoading ? jsx(Loading, { label: 'trilhas' }) : error ? jsx(ErrorState, { label: 'trilhas', error }) : !tracks.length ? jsx(Empty, { label: 'trilhas' }) : jsxs('div', {
+      style: { display: 'grid', gap: 20 },
+      children: [
+        jsx('div', {
+          style: css.grid,
+          children: tracks.map((t) => {
+            const courseId = courseIdForTrack(t.id)
+            const hasCourse = courseId && courses.some((c) => c.id === courseId)
+            return jsx(Card, {
+              title: t.title, icon: 'library',
+              children: jsxs('div', {
+                children: [
+                  jsx('div', { style: { color: 'var(--muted-foreground)', marginBottom: 12, fontSize: 13 }, children: t.stage }),
+                  jsx(Badge, { state: t.status, children: t.status }),
+                  jsx('p', { style: { marginBottom: 0, marginTop: 12, color: 'var(--muted-foreground)', fontSize: 13, lineHeight: 1.5 }, children: t.detail }),
+                  hasCourse && jsx('div', {
+                    style: { marginTop: 16 },
+                    children: jsx(Navigate, {
+                      icon: 'list-tree',
+                      onClick: () => setOpenCourseId(openCourseId === courseId ? null : courseId),
+                      children: openCourseId === courseId ? 'Fechar estrutura do curso' : 'Ver curso, módulos e aulas'
+                    })
+                  })
+                ]
+              })
+            }, t.id)
+          })
+        }),
+        openCourseId && jsx(CourseExplorer, { courseId: openCourseId, onClose: () => setOpenCourseId(null) })
+      ]
+    })
+  })
+}
+
+const artifactIcon = { video: 'device-camera-video', diagram: 'type-hierarchy', simulation: 'pulse', pdf: 'file-pdf', image: 'file-media', document: 'file-text' }
+
+function artifactHref(location) {
+  if (!location) return null
+  if (location.url) return location.url
+  if (location.path) return 'file://' + location.path.split('/').map(encodeURIComponent).join('/')
+  return null
+}
+
+function CourseExplorer({ courseId, onClose }) {
+  const { data, isLoading, error } = useApi(`/courses/${courseId}`, ['course', courseId])
+  const [openTopic, setOpenTopic] = useState(null)
+  const [openLesson, setOpenLesson] = useState(null)
+  if (isLoading) return jsx(Card, { title: 'Carregando curso…', children: jsx(Loading, { label: 'curso' }) })
+  if (error) return jsx(Card, { title: 'Curso', children: jsx(ErrorState, { label: 'curso', error }) })
+  const course = data
+  const chapters = course?.chapters || []
+  const lessons = course?.lessons || []
+  const artifacts = course?.artifacts || []
+  const lessonsByTopic = (topicId) => lessons.filter((l) => l.topic_id === topicId)
+  const artifactsByLesson = (lessonId) => artifacts.filter((a) => a.lesson_id === lessonId)
+  const artifactsByTopic = (topicId) => artifacts.filter((a) => a.topic_id === topicId && !a.lesson_id)
+  const sources = Object.entries(course?.sources || {})
+  return jsxs('div', {
+    style: { display: 'grid', gap: 16 },
+    children: [
+      jsx(Card, {
+        title: `Ementa — ${course?.title || courseId}`, icon: 'book',
+        children: jsxs('div', {
+          style: { display: 'grid', gap: 10 },
+          children: [
+            jsxs('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', color: 'var(--muted-foreground)', fontSize: 13 }, children: [
+              course?.length && jsxs('span', { children: ['◷ ', course.length] }),
+              course?.depth && jsxs('span', { children: ['◉ profundidade: ', course.depth] }),
+              jsxs('span', { children: [chapters.length, ' capítulo(s) · ', lessons.length, ' aula(s) · ', artifacts.length, ' recurso(s)'] })
+            ] }),
+            course?.goal && jsxs('p', { style: { margin: 0, lineHeight: 1.6, fontSize: 14 }, children: [jsx('strong', { children: 'Objetivo: ' }), course.goal] }),
+            course?.vision && jsxs('p', { style: { margin: 0, lineHeight: 1.6, fontSize: 14, color: 'var(--muted-foreground)' }, children: [jsx('strong', { children: 'Visão: ' }), course.vision] }),
+            sources.length > 0 && jsxs('div', {
+              children: [
+                jsx('div', { style: { fontWeight: 650, fontSize: 13, marginTop: 6, marginBottom: 6 }, children: 'Fontes / referências' }),
+                sources.map(([sid, s]) => jsx(ListRow, { icon: 'link-external', title: s.title || sid, detail: s.verification_notes || s.type }, sid))
+              ]
+            }),
+            jsx(Navigate, { onClick: onClose, icon: 'x', children: 'Fechar' })
+          ]
+        })
+      }),
+      jsx(Card, {
+        title: 'Capítulos e módulos', icon: 'list-tree',
+        children: !chapters.length ? jsx(Empty, { label: 'capítulos' }) : jsx('div', {
+          style: { display: 'grid', gap: 14 },
+          children: chapters.map((chapter) => jsxs('div', {
+            style: { border: '1px solid var(--border)', borderRadius: 12, padding: 14 },
+            children: [
+              jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }, children: [
+                jsx('span', { className: 'codicon codicon-folder', style: { fontSize: 14, color: 'var(--accent-2)' } }),
+                jsx('strong', { style: { fontSize: 15 }, children: chapter.title }),
+                jsx(Badge, { state: chapter.state === 'current' ? 'in_progress' : 'planned', children: chapter.state || 'planejado' })
+              ] }),
+              (chapter.topics || []).map((topic) => {
+                const topicLessons = lessonsByTopic(topic.id)
+                const topicArtifacts = artifactsByTopic(topic.id)
+                const isOpen = openTopic === topic.id
+                return jsxs('div', {
+                  style: { marginLeft: 8, paddingLeft: 12, borderLeft: '2px solid var(--border)', marginBottom: 10 },
+                  children: [
+                    jsxs('button', {
+                      type: 'button', className: 'gnos-action', onClick: () => setOpenTopic(isOpen ? null : topic.id),
+                      style: { background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--foreground)', textAlign: 'left', padding: '6px 0', display: 'flex', alignItems: 'center', gap: 8, width: '100%' },
+                      children: [
+                        jsx('span', { className: `codicon codicon-chevron-${isOpen ? 'down' : 'right'}`, style: { fontSize: 12 } }),
+                        jsx('span', { style: { fontWeight: 600, fontSize: 14 }, children: topic.title }),
+                        jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 12 }, children: `${topicLessons.length} aula(s) · ${topic.minutes || '—'} min` })
+                      ]
+                    }),
+                    isOpen && jsxs('div', {
+                      style: { marginLeft: 20, display: 'grid', gap: 10, marginTop: 6 },
+                      children: [
+                        (topic.subtopics || []).length > 0 && jsx('ul', {
+                          style: { margin: 0, paddingLeft: 18, color: 'var(--muted-foreground)', fontSize: 13 },
+                          children: topic.subtopics.map((s, i) => jsx('li', { children: s }, i))
+                        }),
+                        !topicLessons.length && jsx(Empty, { label: 'aulas neste tópico' }),
+                        topicLessons.map((lesson) => {
+                          const lessonOpen = openLesson === lesson.id
+                          const lessonArtifacts = artifactsByLesson(lesson.id)
+                          return jsxs('div', {
+                            style: { border: '1px solid var(--border)', borderRadius: 10, padding: 12 },
+                            children: [
+                              jsxs('button', {
+                                type: 'button', onClick: () => setOpenLesson(lessonOpen ? null : lesson.id),
+                                style: { background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--foreground)', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8, width: '100%' },
+                                children: [
+                                  jsx('span', { className: `codicon codicon-chevron-${lessonOpen ? 'down' : 'right'}`, style: { fontSize: 12 } }),
+                                  jsx('span', { className: 'codicon codicon-book', style: { fontSize: 13, color: 'var(--accent-2)' } }),
+                                  jsx('span', { style: { fontWeight: 600, fontSize: 13.5 }, children: lesson.title }),
+                                  jsx(Badge, { state: lesson.publication === 'ready' ? 'demonstrated' : 'unknown', children: lesson.publication })
+                                ]
+                              }),
+                              lessonOpen && jsxs('div', {
+                                style: { marginTop: 10, display: 'grid', gap: 10 },
+                                children: [
+                                  lesson.purpose && jsx('p', { style: { margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--muted-foreground)' }, children: lesson.purpose }),
+                                  jsx('div', {
+                                    style: { fontWeight: 620, fontSize: 12.5, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--muted-foreground)' },
+                                    children: `Blocos (${(lesson.blocks || []).length})`
+                                  }),
+                                  (lesson.blocks || []).map(([label, body], i) => jsx(ListRow, { icon: blockIcon[label] || 'book', title: label, detail: (body || '').slice(0, 140) }, i)),
+                                  (lesson.exercises || []).length > 0 && jsxs('div', {
+                                    children: [
+                                      jsx('div', { style: { fontWeight: 620, fontSize: 12.5, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--muted-foreground)', marginTop: 4 }, children: `Exercícios (${lesson.exercises.length})` }),
+                                      lesson.exercises.map((ex) => jsx(ListRow, { icon: 'checklist', title: ex.prompt?.slice(0, 120) || ex.id, detail: (ex.success_criteria || []).join(' · ') }, ex.id))
+                                    ]
+                                  }),
+                                  lessonArtifacts.length > 0 && jsxs('div', {
+                                    children: [
+                                      jsx('div', { style: { fontWeight: 620, fontSize: 12.5, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--muted-foreground)', marginTop: 4 }, children: `Vídeos e mídia (${lessonArtifacts.length})` }),
+                                      lessonArtifacts.map((a) => jsx(ListRow, {
+                                        icon: artifactIcon[a.type] || 'file',
+                                        title: a.title,
+                                        detail: a.purpose,
+                                        action: artifactHref(a.location) && jsx(Navigate, { onClick: () => host.openExternal?.(artifactHref(a.location)), icon: 'link-external', children: 'Abrir' })
+                                      }, a.id))
+                                    ]
+                                  }),
+                                  lesson.portal_path && jsx(Navigate, { primary: true, icon: 'link-external', onClick: () => openPortal(lesson.portal_path), children: 'Ver aula completa (com diagramas e código)' })
+                                ]
+                              })
+                            ]
+                          }, lesson.id)
+                        }),
+                        topicArtifacts.length > 0 && topicArtifacts.map((a) => jsx(ListRow, {
+                          icon: artifactIcon[a.type] || 'file',
+                          title: a.title,
+                          detail: a.purpose,
+                          action: artifactHref(a.location) && jsx(Navigate, { onClick: () => host.openExternal?.(artifactHref(a.location)), icon: 'link-external', children: 'Abrir' })
+                        }, a.id))
+                      ]
+                    })
+                  ]
+                }, topic.id)
+              })
+            ]
+          }, chapter.id))
+        })
+      })
+    ]
+  })
 }
 function Timeline() {
   const { data, isLoading, error } = useApi('/timeline', ['timeline'])
@@ -303,8 +536,11 @@ function Timeline() {
   return jsx(Page, { label: 'Planejado e real', title: 'Cronograma', actions, subtitle: 'O histórico real explica adaptações sem apagar o plano que existia antes delas.', children: isLoading ? jsx(Loading, { label: 'cronograma' }) : error ? jsx(ErrorState, { label: 'cronograma', error }) : !rows.length ? jsx(Empty, { label: 'cronograma' }) : jsx(Card, { title: mode === 'actual' ? 'Execução real' : 'Plano original', icon: mode === 'actual' ? 'history' : 'checklist', children: rows.map((row) => jsx(ListRow, { icon: kindIcon[row.kind], title: `${row.entry_date} · ${row.text}`, detail: row.adaptive_reason || row.kind, action: jsx(Badge, { state: row.kind === 'repair' ? 'repair-needed' : mode === 'actual' ? 'completed' : 'planned', children: row.kind }) }, row.id)) }) })
 }
 function Lesson() {
-  const { data, isLoading, error } = useApi('/today', ['today'])
-  const sessionId = data?.session_id
+  const { data: today, isLoading: isLoadingToday } = useApi('/today', ['today'])
+  const { data: sessionsData, isLoading: isLoadingSessions } = useApi('/sessions', ['sessions'])
+  const sessions = sessionsData?.sessions || []
+  const [selectedId, setSelectedId] = useState(null)
+  const sessionId = selectedId || today?.session_id
   const { data: session, isLoading: isLoadingSession } = useApi(sessionId ? `/sessions/${sessionId}` : null, ['session', sessionId])
   const [busy, setBusy] = useState(false)
   const changeStatus = async (kind) => {
@@ -315,17 +551,38 @@ function Lesson() {
       host.toast?.(kind === 'start' ? 'Aula iniciada.' : 'Aula concluída.', 'success')
     } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
   }
-  if (isLoading || isLoadingSession) return jsx(Page, { label: '…', title: 'Aula', children: jsx(Loading, { label: 'aula' }) })
-  if (error || !session) return jsx(Page, { label: 'Aula', title: 'Aula', children: error ? jsx(ErrorState, { label: 'aula', error }) : jsx(Empty, { label: 'aula' }) })
-  const actions = jsxs('div', { style: { display: 'flex', gap: 8 }, children: [
+  if (isLoadingToday || isLoadingSessions || isLoadingSession) return jsx(Page, { label: '…', title: 'Aula', children: jsx(Loading, { label: 'aula' }) })
+  if (!session) return jsx(Page, { label: 'Aula', title: 'Aula', children: jsx(Empty, { label: 'aula' }) })
+  const picker = sessions.length > 1 && jsx('label', {
+    style: { display: 'grid', gap: 4, color: 'var(--muted-foreground)', fontSize: 12, minWidth: 260 },
+    children: [
+      'Aula de hoje',
+      jsx('select', {
+        className: 'gnos-select', value: sessionId || '', style: { ...css.ghost, width: '100%' },
+        onChange: (event) => setSelectedId(event.target.value),
+        children: sessions.map((s) => jsx('option', {
+          value: s.id,
+          children: `${s.track_title ? s.track_title + ' · ' : ''}${s.actual_topic || s.planned_topic}${s.status === 'completed' ? ' (concluída)' : ''}`
+        }, s.id))
+      })
+    ]
+  })
+  const actions = jsxs('div', { style: { display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }, children: [
+    picker,
     session.status === 'planned' && jsx(Navigate, { primary: true, icon: 'play', onClick: () => changeStatus('start'), children: busy ? 'Iniciando…' : 'Iniciar aula' }),
     session.status === 'in_progress' && jsx(Navigate, { primary: true, icon: 'check', onClick: () => changeStatus('complete'), children: busy ? 'Concluindo…' : 'Concluir aula' }),
+    session.portal_path && jsx(Navigate, {
+      icon: 'browser', onClick: async () => {
+        const opened = await openPortal(session.portal_path)
+        if (!opened) host.toast?.('Não foi possível abrir o conteúdo completo (portal ausente ou navegador indisponível).', 'error')
+      }, children: 'Ver conteúdo completo'
+    }),
     jsx(Navigate, { path: `${BASE}/lab`, icon: 'beaker', children: 'Abrir laboratório' })
   ] })
   return jsx(Page, {
     label: session.teacher, title: session.actual_topic || session.planned_topic, subtitle: session.objective, actions,
     children: jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 286px', gap: 16 }, children: [
-      jsx('section', { style: { display: 'grid', gap: 14 }, children: (session.blocks || []).map(([type, body], index) => jsx(Card, { title: type, icon: blockIcon[type] || 'symbol-misc', children: ['Código', 'Diagrama', 'Equação'].includes(type) ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx('p', { style: { margin: 0, lineHeight: 1.7, fontSize: 14 }, children: body }) }, `${type}-${index}`)) }),
+      jsx('section', { style: { display: 'grid', gap: 14 }, children: (session.blocks || []).map(([type, body], index) => jsx(Card, { title: type, icon: blockIcon[type] || 'symbol-misc', children: ['Código', 'Diagrama', 'Equação'].includes(type) ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body }) }, `${type}-${index}`)) }),
       jsx('aside', { children: jsxs('div', { style: { position: 'sticky', top: 16, display: 'grid', gap: 14 }, children: [
         jsx(Card, { title: 'Estado da sessão', icon: 'pulse', children: jsxs('div', { children: [jsx(Badge, { state: session.status, children: session.status }), jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: `${session.planned_duration || '—'} minutos planejados` })] }) }),
         jsx(Card, { title: 'Próximo passo', icon: 'arrow-swap', children: jsx('p', { style: { margin: 0, lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: session.next_step || 'Aguardando conclusão da aula' }) }),
@@ -430,6 +687,7 @@ export default {
   description: 'GNOS Learning Dashboard — interface V1 para a jornada de estudos.',
   register(ctx) {
     restImpl = (path, opts) => ctx.rest(path, opts)
+    osImpl = ctx.os
     ctx.registerMany([
       ...pages.map(([path, , , Component]) => ({
         id: `gnos.route.${path}`,

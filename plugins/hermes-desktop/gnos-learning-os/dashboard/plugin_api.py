@@ -129,9 +129,11 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.sessions (
     started_at TEXT,
     completed_at TEXT,
     next_step TEXT,
+    portal_path TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE {SCHEMA}.sessions ADD COLUMN IF NOT EXISTS portal_path TEXT;
 
 -- Append-only. A reschedule/repair NEVER updates an existing row; it only
 -- inserts a new one. `source` distinguishes the two chronologies.
@@ -231,6 +233,55 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.lab_checks (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS {SCHEMA}.courses (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    goal TEXT,
+    vision TEXT,
+    depth TEXT,
+    length TEXT,
+    chapters_json TEXT NOT NULL DEFAULT '[]',
+    sources_json TEXT NOT NULL DEFAULT '{{}}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.course_lessons (
+    id TEXT NOT NULL,
+    course_id TEXT NOT NULL REFERENCES {SCHEMA}.courses(id) ON DELETE CASCADE,
+    chapter_id TEXT,
+    topic_id TEXT,
+    title TEXT NOT NULL,
+    purpose TEXT,
+    teacher TEXT,
+    concepts_json TEXT NOT NULL DEFAULT '[]',
+    blocks_json TEXT NOT NULL DEFAULT '[]',
+    exercises_json TEXT NOT NULL DEFAULT '[]',
+    publication TEXT NOT NULL DEFAULT 'draft',
+    portal_path TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (course_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.course_artifacts (
+    id TEXT NOT NULL,
+    course_id TEXT NOT NULL REFERENCES {SCHEMA}.courses(id) ON DELETE CASCADE,
+    chapter_id TEXT,
+    topic_id TEXT,
+    lesson_id TEXT,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    purpose TEXT,
+    location_json TEXT NOT NULL DEFAULT '{{}}',
+    mime_type TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (course_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_course_lessons_course ON {SCHEMA}.course_lessons(course_id);
+CREATE INDEX IF NOT EXISTS idx_course_artifacts_course ON {SCHEMA}.course_artifacts(course_id);
+CREATE INDEX IF NOT EXISTS idx_course_artifacts_lesson ON {SCHEMA}.course_artifacts(lesson_id);
 CREATE INDEX IF NOT EXISTS idx_timeline_session ON {SCHEMA}.timeline_entries(session_id);
 CREATE INDEX IF NOT EXISTS idx_timeline_source ON {SCHEMA}.timeline_entries(source);
 CREATE INDEX IF NOT EXISTS idx_attempts_assessment ON {SCHEMA}.attempts(assessment_id);
@@ -557,6 +608,32 @@ async def get_timeline():
     return {"planned": [dict(r) for r in planned], "actual": [dict(r) for r in actual]}
 
 
+@router.get("/sessions")
+async def list_sessions():
+    """All course lesson sessions, newest first. Backs the lesson picker on the
+    Aula page so a learner studying more than one subject/lesson the same day
+    can switch between them instead of only seeing whichever session /today
+    happens to pick."""
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT s.*, t.title AS track_title FROM {SCHEMA}.sessions s "
+            f"LEFT JOIN {SCHEMA}.tracks t ON t.id = s.track_id "
+            "WHERE s.track_id LIKE 'track-course-%' "
+            "ORDER BY COALESCE(s.actual_date, s.planned_date) DESC, s.updated_at DESC"
+        )
+        rows = cur.fetchall()
+    return {
+        "sessions": [
+            {
+                **_session_dict(row),
+                "track_title": row.get("track_title"),
+            }
+            for row in rows
+        ]
+    }
+
+
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: str):
     _ensure_seeded()
@@ -566,6 +643,88 @@ async def get_session(session_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
     return _session_dict(row)
+
+
+def _course_dict(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "goal": row.get("goal"),
+        "vision": row.get("vision"),
+        "depth": row.get("depth"),
+        "length": row.get("length"),
+        "chapters": json.loads(row.get("chapters_json") or "[]"),
+        "sources": json.loads(row.get("sources_json") or "{}"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _course_lesson_dict(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "course_id": row["course_id"],
+        "chapter_id": row.get("chapter_id"),
+        "topic_id": row.get("topic_id"),
+        "title": row["title"],
+        "purpose": row.get("purpose"),
+        "teacher": row.get("teacher"),
+        "concepts": json.loads(row.get("concepts_json") or "[]"),
+        "blocks": json.loads(row.get("blocks_json") or "[]"),
+        "exercises": json.loads(row.get("exercises_json") or "[]"),
+        "publication": row.get("publication"),
+        "portal_path": row.get("portal_path"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _course_artifact_dict(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "course_id": row["course_id"],
+        "chapter_id": row.get("chapter_id"),
+        "topic_id": row.get("topic_id"),
+        "lesson_id": row.get("lesson_id"),
+        "type": row["type"],
+        "title": row["title"],
+        "purpose": row.get("purpose"),
+        "location": json.loads(row.get("location_json") or "{}"),
+        "mime_type": row.get("mime_type"),
+        "status": row.get("status"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+@router.get("/courses")
+async def list_courses():
+    """All synced courses, for the Trilha screen's course/module drill-down."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM {SCHEMA}.courses ORDER BY updated_at DESC")
+        rows = cur.fetchall()
+    return {"courses": [_course_dict(r) for r in rows]}
+
+
+@router.get("/courses/{course_id}")
+async def get_course(course_id: str):
+    """Full course tree: chapters/topics (from the course plan) plus every
+    synced lesson and artifact under it, so the desktop UI can render
+    Curso -> Capítulo -> Tópico -> Aula -> Exercícios/Artefatos without a
+    second round trip per level."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM {SCHEMA}.courses WHERE id = %s", (course_id,))
+        course_row = cur.fetchone()
+        if course_row is None:
+            raise HTTPException(status_code=404, detail="course not found")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.course_lessons WHERE course_id = %s ORDER BY updated_at ASC",
+            (course_id,),
+        )
+        lessons = [_course_lesson_dict(r) for r in cur.fetchall()]
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.course_artifacts WHERE course_id = %s ORDER BY updated_at ASC",
+            (course_id,),
+        )
+        artifacts = [_course_artifact_dict(r) for r in cur.fetchall()]
+    return {**_course_dict(course_row), "lessons": lessons, "artifacts": artifacts}
 
 
 @router.get("/assessments")
