@@ -12,6 +12,8 @@ import importlib
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -200,6 +202,31 @@ class GnosPluginBackendTests(unittest.TestCase):
         today = self._run(self.api.get_today())
         self.assertEqual(today["status"], "in_progress")
         self.assertEqual("Sessão de teste", today["session"])
+
+    def test_legacy_portal_path_is_translated_to_the_active_workspace(self):
+        """Old database rows must survive the workspace-root migration."""
+        original_workspace_root = self.api.WORKSPACE_ROOT
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            legacy_home = tmp_path / "legacy-home"
+            portal = (
+                workspace_root / "learners" / "airflow" / "courses" / "course" /
+                "portal" / "index.html"
+            )
+            portal.parent.mkdir(parents=True)
+            portal.write_text("<main>Conteúdo da aula</main>", encoding="utf-8")
+            legacy_path = (
+                legacy_home / "learners" / "airflow" / "courses" / "course" /
+                "portal" / "index.html"
+            )
+            self.api.WORKSPACE_ROOT = workspace_root
+            try:
+                with patch.object(self.api.Path, "home", return_value=legacy_home):
+                    html = self.api._read_portal_html(str(legacy_path))
+            finally:
+                self.api.WORKSPACE_ROOT = original_workspace_root
+        self.assertIn("Conteúdo da aula", html)
 
     def test_timeline_planned_is_never_mutated_by_session_actions(self):
         before = self._run(self.api.get_timeline())

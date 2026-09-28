@@ -126,17 +126,32 @@ def _inline_portal_assets(html: str, portal_dir: Path) -> str:
 
 
 def _read_portal_html(portal_path: Optional[str]) -> str:
-    """Resolve and read a portal `index.html`, refusing anything outside
-    WORKSPACE_ROOT/learners/.../portal/ (defence in depth: portal_path is
-    server-written by sync_evidence.py, never client-supplied, but a route
-    must not trust a stored path blindly either)."""
+    """Read a rendered portal while retaining the workspace boundary.
+
+    Older syncs recorded ``~/learners/...`` while course rendering already
+    lived under ``DIDAKTOS_WORKSPACE_ROOT/learners/...``. Translate only that
+    exact legacy layout; arbitrary stored paths remain rejected.
+    """
     if not portal_path:
         raise HTTPException(status_code=404, detail="no portal rendered for this lesson yet")
     try:
         resolved = Path(portal_path).resolve()
     except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail="invalid portal path") from exc
-    allowed_root = WORKSPACE_ROOT / "learners"
+
+    allowed_root = (WORKSPACE_ROOT / "learners").resolve()
+    if allowed_root not in resolved.parents and resolved != allowed_root:
+        legacy_root = (Path.home() / "learners").resolve()
+        try:
+            legacy_relative = resolved.relative_to(legacy_root)
+        except ValueError:
+            legacy_relative = None
+        if legacy_relative is not None:
+            translated = (allowed_root / legacy_relative).resolve()
+            if translated.is_file():
+                log.info("translated legacy portal path %s -> %s", resolved, translated)
+                resolved = translated
+
     if allowed_root not in resolved.parents and resolved != allowed_root:
         log.warning("refusing portal path outside workspace: %s", resolved)
         raise HTTPException(status_code=404, detail="portal not found")
