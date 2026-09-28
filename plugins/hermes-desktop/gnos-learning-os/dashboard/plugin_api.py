@@ -818,10 +818,11 @@ async def get_timeline():
 
 @router.get("/sessions")
 async def list_sessions():
-    """All course lesson sessions, newest first. Backs the lesson picker on the
-    Aula page so a learner studying more than one subject/lesson the same day
-    can switch between them instead of only seeing whichever session /today
-    happens to pick."""
+    """All course lesson sessions, most recently touched subject first and, inside
+    a subject, in the course plan's own order. Backs the lesson picker on the
+    Aula page: a learner studying more than one subject can switch between them,
+    and each option says where it sits in the plan ("Aula 7 de 16") instead of
+    reading as an arbitrary list."""
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -831,15 +832,28 @@ async def list_sessions():
             "ORDER BY COALESCE(s.actual_date, s.planned_date) DESC, s.updated_at DESC"
         )
         rows = cur.fetchall()
-    return {
-        "sessions": [
+        targets = []
+        course_ids: set[str] = set()
+        for row in rows:
+            course_id, lesson_id = _session_target(row["id"])
+            if course_id:
+                course_ids.add(course_id)
+            targets.append((row, course_id, lesson_id))
+        plan = _session_plan_map(cur, course_ids)
+    sessions = []
+    for row, course_id, lesson_id in targets:
+        entry = plan.get(f"{course_id}|{lesson_id}") or {}
+        sessions.append(
             {
                 **_session_dict(row),
                 "track_title": row.get("track_title"),
+                "course_id": course_id,
+                "plan_position": entry.get("position"),
+                "plan_total": entry.get("total"),
+                "sequence_label": entry.get("label"),
             }
-            for row in rows
-        ]
-    }
+        )
+    return {"sessions": _order_sessions_by_plan(sessions)}
 
 
 @router.get("/sessions/{session_id}")
@@ -1038,6 +1052,86 @@ def _authored_lesson_order(lessons: list[dict], chapters: list[dict]) -> list[di
     for lesson in lessons:
         if lesson["id"] not in seen:
             ordered.append(lesson)
+    return ordered
+
+
+def _session_target(session_id: str) -> tuple[Optional[str], Optional[str]]:
+    """(course_id, lesson_id) carried by a course-lesson session id.
+
+    Course lesson sessions are named `session-<course_id>-<lesson_id>`, and the
+    lesson id is the `lesson-topic-...` key shared by `course_lessons` and the
+    plan's `lesson_ids`. The table has no lesson_id column, so the session name
+    is the only link between a session and the plan.
+    """
+    course_head, sep, lesson_tail = (session_id or "").partition("-lesson-topic-")
+    if not sep or not course_head.startswith("session-"):
+        return None, None
+    return course_head[len("session-") :], f"lesson-topic-{lesson_tail}"
+
+
+def _session_plan_map(cur, course_ids: set[str]) -> dict[str, dict]:
+    """Where each lesson sits in its course plan, keyed by f"{course_id}|{lesson_id}".
+
+    Numbering follows the sequence the reader serves (plan order first, then
+    lessons the plan does not name yet), so the picker, the Curso tab and the
+    reader all say "Aula N de M" with the same M — a draft the plan has not
+    absorbed gets the number and an explicit "(planejada)" so it never reads as
+    part of the published course.
+    """
+    plan: dict[str, dict] = {}
+    for course_id in sorted(course_ids):
+        cur.execute(f"SELECT * FROM {SCHEMA}.courses WHERE id = %s", (course_id,))
+        course_row = cur.fetchone()
+        if course_row is None:
+            continue
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.course_lessons WHERE course_id = %s ORDER BY updated_at ASC",
+            (course_id,),
+        )
+        lessons = _authored_lesson_order(
+            [_course_lesson_dict(r) for r in cur.fetchall()],
+            _course_dict(course_row)["chapters"],
+        )
+        total = len(lessons)
+        for position, lesson in enumerate(lessons):
+            label = f"Aula {position + 1} de {total}"
+            in_plan = _lesson_in_plan(lesson["id"], _course_dict(course_row)["chapters"])
+            if not in_plan:
+                label += " (planejada)"
+            plan[f"{course_id}|{lesson['id']}"] = {
+                "position": position + 1,
+                "total": total,
+                "label": label,
+                "in_plan": in_plan,
+            }
+    return plan
+
+
+def _lesson_in_plan(lesson_id: str, chapters: list[dict]) -> bool:
+    """True when the course plan (chapter -> topic -> lesson_ids) names this lesson."""
+    for chapter in chapters or []:
+        for topic in (chapter or {}).get("topics") or []:
+            if lesson_id in ((topic or {}).get("lesson_ids") or []):
+                return True
+    return False
+
+
+def _order_sessions_by_plan(sessions: list[dict]) -> list[dict]:
+    """Subject you touched last stays on top; inside a subject, follow the plan.
+
+    Newest-first alone made the picker look unordered: every lesson of one course
+    shared a date, so the tie broke on `updated_at` and the list came back in
+    reverse reading order, which reads as a wrong sequence.
+    """
+    groups: dict[str, list[dict]] = {}
+    for session in sessions:
+        groups.setdefault(session.get("track_id") or "", []).append(session)
+    ordered: list[dict] = []
+    for bucket in groups.values():
+        planned = [s for s in bucket if s.get("plan_position")]
+        unplanned = [s for s in bucket if not s.get("plan_position")]
+        planned.sort(key=lambda s: s["plan_position"])
+        ordered.extend(planned + unplanned)
     return ordered
 
 

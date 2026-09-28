@@ -269,7 +269,7 @@ function LessonPage({ useApi, postApi, host, BASE, Page, Loading, Empty, Card, B
         onChange: (event) => setSelectedId(event.target.value),
         children: sessions.map((s) => jsx('option', {
           value: s.id,
-          children: `${s.track_title ? s.track_title + ' · ' : ''}${s.actual_topic || s.planned_topic}${s.status === 'completed' ? ' (concluída)' : ''}`
+          children: `${s.track_title ? s.track_title + ' · ' : ''}${s.sequence_label ? s.sequence_label + ' · ' : ''}${s.actual_topic || s.planned_topic}${s.status === 'completed' ? ' (concluída)' : ''}`
         }, s.id))
       })
     ]
