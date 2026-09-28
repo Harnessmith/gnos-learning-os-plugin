@@ -200,7 +200,7 @@ function LabPage({ useApi, postApi, host, Page, Loading, ErrorState, Empty, Card
 
 // Inlined from pages/lesson.js
 
-function LessonPage({ useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, SharedRichText, PortalDialog }) {
+function LessonPage({ useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, PortalDialog }) {
   const { data: today, isLoading: isLoadingToday } = useApi('/today', ['today'])
   const { data: sessionsData, isLoading: isLoadingSessions } = useApi('/sessions', ['sessions'])
   const sessions = sessionsData?.sessions || []
@@ -269,7 +269,7 @@ function LessonPage({ useApi, postApi, host, BASE, Page, Loading, Empty, Card, B
           }
           return jsx(Card, {
             title: type, icon: blockIcon[type] || 'symbol-misc',
-            children: isCode ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(SharedRichText, { text: body })
+            children: isCode ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body })
           }, `${type}-${index}`)
         }) }),
         jsx('aside', { children: jsxs('div', { style: { position: 'sticky', top: 16, display: 'grid', gap: 14 }, children: [
@@ -1067,7 +1067,7 @@ function Timeline() {
   return jsx(TimelinePage, { useApi, mutateApi, postApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, ListRow, css, kindIcon })
 }
 function Lesson() {
-  return jsx(LessonPage, { useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, SharedRichText: RichText, PortalDialog })
+  return jsx(LessonPage, { useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, PortalDialog })
 }
 const artifactIcon = { video: 'device-camera-video', diagram: 'type-hierarchy', simulation: 'pulse', pdf: 'file-pdf', image: 'file-media', document: 'file-text' }
 function Lab() {

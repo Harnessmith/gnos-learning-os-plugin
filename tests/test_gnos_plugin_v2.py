@@ -61,6 +61,12 @@ class GnosDesktopPluginRendererTests(unittest.TestCase):
         self.assertIn("ctx.rest(path, opts)", self.source)
         self.assertIn("function rest(path, opts)", self.source)
 
+    def test_lesson_route_uses_module_scoped_rich_text(self):
+        """The bundled route must not depend on a prop alias that can go stale."""
+        self.assertIn("children: isCode ? jsx('pre'", self.source)
+        self.assertIn("jsx(RichText, { text: body })", self.source)
+        self.assertNotIn("SharedRichText", self.source)
+
     def test_internal_app_is_functional_not_a_static_shell(self):
         for marker in (
             "className: 'gnos-shell'",
