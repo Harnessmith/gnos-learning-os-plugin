@@ -327,5 +327,31 @@ class PluginIntegrityTests(unittest.TestCase):
                 cur.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.evidence_history WHERE competency_id = %s", ("dns",))
                 self.assertEqual(cur.fetchone()["count"], 2)
 
+    def test_desktop_entry_and_modules_are_valid_javascript(self):
+        """The renderer blob-imports the desktop entry file, so a syntactically
+        invalid entry fails the reload silently and the app keeps rendering the
+        previously loaded module — pin parseability of every desktop source."""
+        import shutil
+        import subprocess
+        import tempfile
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable")
+        desktop = ROOT / "plugins" / "hermes-desktop" / "gnos-learning-os" / "desktop"
+        targets = sorted(desktop.rglob("*.js"))
+        self.assertTrue(targets, "no desktop javascript found")
+        with tempfile.TemporaryDirectory() as tmp:
+            for path in targets:
+                probe = Path(tmp) / f"{path.stem}.mjs"
+                probe.write_bytes(path.read_bytes())
+                done = subprocess.run(
+                    [node, "--check", str(probe)], capture_output=True, text=True
+                )
+                self.assertEqual(
+                    done.returncode, 0, f"{path.name} is not valid JavaScript:\n{done.stderr}"
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
