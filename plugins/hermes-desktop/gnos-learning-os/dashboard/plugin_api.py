@@ -54,6 +54,8 @@ from pydantic import BaseModel, Field
 # dashboard/services package importable in that loader mode.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from services.recommendations import choose_next
+import portal_viewer  # noqa: E402 - sibling module: portal artifacts + viewer layer
+import material_server  # noqa: E402 - sibling module: loopback origin for course material
 
 log = logging.getLogger("gnos_learning_os")
 
@@ -161,7 +163,10 @@ def _read_portal_html(portal_path: Optional[str]) -> str:
         html = resolved.read_text(encoding="utf-8")
     except OSError as exc:
         raise HTTPException(status_code=404, detail="portal not found") from exc
-    return _inline_portal_assets(html, resolved.parent)
+    html = _inline_portal_assets(html, resolved.parent)
+    # A data:-transported portal has no base directory, so lesson artifacts
+    # (../artifacts/...) must be inlined as well, not only renderer CSS/JS.
+    return portal_viewer.inline_artifacts(html, resolved.parent)
 
 
 def _conninfo() -> str:
@@ -423,6 +428,19 @@ CREATE INDEX IF NOT EXISTS idx_timeline_session ON {SCHEMA}.timeline_entries(ses
 CREATE INDEX IF NOT EXISTS idx_timeline_source ON {SCHEMA}.timeline_entries(source);
 CREATE INDEX IF NOT EXISTS idx_attempts_assessment ON {SCHEMA}.attempts(assessment_id);
 CREATE INDEX IF NOT EXISTS idx_lab_checks_lab ON {SCHEMA}.lab_checks(lab_id);
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.lesson_progress (
+    course_id TEXT NOT NULL REFERENCES {SCHEMA}.courses(id) ON DELETE CASCADE,
+    lesson_id TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'viewed',
+    viewed_at TEXT,
+    completed_at TEXT,
+    source TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (course_id, lesson_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lesson_progress_course ON {SCHEMA}.lesson_progress(course_id, state);
 """
 
 
@@ -995,6 +1013,156 @@ def _course_artifact_dict(row: dict) -> dict:
     }
 
 
+_LESSON_STATES = ("viewed", "completed")
+
+
+def _authored_lesson_order(lessons: list[dict], chapters: list[dict]) -> list[dict]:
+    """Order lessons the way the course plan authored them.
+
+    `chapters_json` is the author's source of truth for sequence
+    (chapter -> topic -> lesson_ids). Lessons that a later sync wrote but the
+    plan does not mention keep their relative order at the end. Without this
+    the API returned heap order, which is why every lesson looked
+    interchangeabe in the reader ("nobody knows which one is first").
+    """
+    by_id = {lesson["id"]: lesson for lesson in lessons}
+    ordered: list[dict] = []
+    seen: set[str] = set()
+    for chapter in chapters or []:
+        for topic in (chapter or {}).get("topics") or []:
+            for lesson_id in (topic or {}).get("lesson_ids") or []:
+                lesson = by_id.get(lesson_id)
+                if lesson is not None and lesson_id not in seen:
+                    seen.add(lesson_id)
+                    ordered.append(lesson)
+    for lesson in lessons:
+        if lesson["id"] not in seen:
+            ordered.append(lesson)
+    return ordered
+
+
+def _lesson_progress_map(cur, course_id: str) -> dict[str, dict]:
+    """Per-lesson reading state for a course, keyed by lesson id."""
+    try:
+        cur.execute(
+            f"SELECT lesson_id, state, viewed_at, completed_at, source, updated_at "
+            f"FROM {SCHEMA}.lesson_progress WHERE course_id = %s",
+            (course_id,),
+        )
+        rows = cur.fetchall()
+    except psycopg.errors.UndefinedTable:
+        log.warning("lesson_progress missing; run db/migrations/007_lesson_progress.sql")
+        return {}
+    return {
+        row["lesson_id"]: {
+            "state": row["state"],
+            "viewed_at": row.get("viewed_at"),
+            "completed_at": row.get("completed_at"),
+            "source": row.get("source"),
+            "updated_at": row.get("updated_at"),
+        }
+        for row in rows
+    }
+
+
+def _progress_summary(lessons: list[dict], progress: dict[str, dict]) -> dict:
+    completed = sum(1 for item in lessons if (progress.get(item["id"]) or {}).get("state") == "completed")
+    viewed = sum(1 for item in lessons if (progress.get(item["id"]) or {}).get("state") == "viewed")
+    total = len(lessons)
+    return {"total": total, "completed": completed, "viewed": viewed, "pending": max(0, total - completed - viewed)}
+
+
+def _viewer_state(course_row: dict, lessons: list[dict], progress: dict[str, dict], lesson_id: str, portal_html: str) -> dict:
+    """Sequence + progress payload handed to the portal viewer layer."""
+    mapping = portal_viewer.map_lessons_to_portal(portal_html, [dict(item) for item in lessons])
+    titles = {item["id"]: item.get("title") for item in lessons}
+    try:
+        focus = mapping.index(lesson_id)
+    except ValueError:
+        focus = 0
+    return {
+        "courseId": course_row["id"],
+        "courseTitle": course_row.get("title"),
+        "lessonIds": mapping,
+        "titles": [titles.get(mapped) for mapped in mapping],
+        "progress": {mid: (progress.get(mid) or {}).get("state") for mid in mapping if mid},
+        "focusIndex": focus,
+        "total": len(mapping),
+    }
+
+
+class LessonProgressPayload(BaseModel):
+    state: str = Field(default="viewed")
+    source: Optional[str] = None
+
+
+@router.post("/courses/{course_id}/lessons/{lesson_id}/progress")
+async def set_lesson_progress(course_id: str, lesson_id: str, payload: LessonProgressPayload):
+    """Record that a lesson was read (`viewed`) or finished (`completed`).
+
+    This is what answers "how does the system know the lesson was consulted?":
+    the reader posts `viewed` whenever a lesson becomes current and
+    `completed` when the student confirms it. State never downgrades, so
+    reopening a finished lesson keeps `completed` and its original timestamp.
+    """
+    state = (payload.state or "").strip().lower()
+    if state not in _LESSON_STATES:
+        raise HTTPException(status_code=422, detail="state must be 'viewed' or 'completed'")
+    now = _now()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT id FROM {SCHEMA}.courses WHERE id = %s", (course_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="course not found")
+        cur.execute(
+            f"SELECT id FROM {SCHEMA}.course_lessons WHERE course_id = %s AND id = %s",
+            (course_id, lesson_id),
+        )
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="lesson not found")
+        cur.execute(
+            f"SELECT state, viewed_at, completed_at FROM {SCHEMA}.lesson_progress "
+            f"WHERE course_id = %s AND lesson_id = %s",
+            (course_id, lesson_id),
+        )
+        current = cur.fetchone() or {}
+        viewed_at = current.get("viewed_at") or now
+        completed_at = current.get("completed_at")
+        if state == "completed":
+            completed_at = completed_at or now
+            final_state = "completed"
+        else:
+            final_state = current.get("state") or "viewed"
+        cur.execute(
+            f"""INSERT INTO {SCHEMA}.lesson_progress
+                    (course_id, lesson_id, state, viewed_at, completed_at, source, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (course_id, lesson_id) DO UPDATE SET
+                    state = EXCLUDED.state,
+                    viewed_at = EXCLUDED.viewed_at,
+                    completed_at = EXCLUDED.completed_at,
+                    source = EXCLUDED.source,
+                    updated_at = EXCLUDED.updated_at""",
+            (course_id, lesson_id, final_state, viewed_at, completed_at, payload.source, now),
+        )
+        conn.commit()
+        cur.execute(
+            f"SELECT id FROM {SCHEMA}.course_lessons WHERE course_id = %s",
+            (course_id,),
+        )
+        ids = [row["id"] for row in cur.fetchall()]
+        progress = _lesson_progress_map(cur, course_id)
+    return {
+        "course_id": course_id,
+        "lesson_id": lesson_id,
+        "state": final_state,
+        "viewed_at": viewed_at,
+        "completed_at": completed_at,
+        "summary": _progress_summary([{"id": i} for i in ids], progress),
+    }
+
+
+@router.get("/assessments")
+
 @router.get("/courses")
 async def list_courses():
     """All synced courses, for the Trilha screen's course/module drill-down."""
@@ -1019,13 +1187,71 @@ async def get_course(course_id: str):
             f"SELECT * FROM {SCHEMA}.course_lessons WHERE course_id = %s ORDER BY updated_at ASC",
             (course_id,),
         )
-        lessons = [_course_lesson_dict(r) for r in cur.fetchall()]
+        lessons = _authored_lesson_order(
+            [_course_lesson_dict(r) for r in cur.fetchall()],
+            _course_dict(course_row)["chapters"],
+        )
         cur.execute(
             f"SELECT * FROM {SCHEMA}.course_artifacts WHERE course_id = %s ORDER BY updated_at ASC",
             (course_id,),
         )
         artifacts = [_course_artifact_dict(r) for r in cur.fetchall()]
-    return {**_course_dict(course_row), "lessons": lessons, "artifacts": artifacts}
+        progress = _lesson_progress_map(cur, course_id)
+    total = len(lessons)
+    for position, lesson in enumerate(lessons):
+        entry = progress.get(lesson["id"]) or {}
+        lesson["position"] = position + 1
+        lesson["sequence_label"] = f"Aula {position + 1} de {total}"
+        lesson["progress_state"] = entry.get("state") or "pending"
+        lesson["progress"] = entry or None
+    return {
+        **_course_dict(course_row),
+        "lessons": lessons,
+        "artifacts": artifacts,
+        "progress": _progress_summary(lessons, progress),
+    }
+
+
+def _material_course_root(course_id: str) -> tuple[Path, str]:
+    """(course root, portal path inside it) for the loopback material origin."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT portal_path FROM {SCHEMA}.course_lessons "
+            "WHERE course_id = %s AND portal_path IS NOT NULL "
+            "ORDER BY updated_at ASC LIMIT 1",
+            (course_id,),
+        )
+        row = cur.fetchone()
+    if row is None or not row["portal_path"]:
+        raise HTTPException(status_code=404, detail="portal not found")
+    portal = Path(row["portal_path"]).resolve()
+    return portal.parent.parent, str(portal.relative_to(portal.parent.parent))
+
+
+def _material_render_entry(course_id: str, lesson_id: str, html: str) -> str:
+    """Viewer layer for a served portal: sequence, one lesson at a time, OK, progress."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM {SCHEMA}.courses WHERE id = %s", (course_id,))
+        course_row = cur.fetchone()
+        if course_row is None:
+            raise HTTPException(status_code=404, detail="course not found")
+        cur.execute(
+            f"SELECT * FROM {SCHEMA}.course_lessons WHERE course_id = %s ORDER BY updated_at ASC",
+            (course_id,),
+        )
+        lessons = _authored_lesson_order(
+            [_course_lesson_dict(r) for r in cur.fetchall()],
+            _course_dict(course_row)["chapters"],
+        )
+        progress = _lesson_progress_map(cur, course_id)
+    if not any(item["id"] == lesson_id for item in lessons):
+        lesson_id = lessons[0]["id"] if lessons else ""
+    state = _viewer_state(course_row, lessons, progress, lesson_id, html)
+    return portal_viewer.inject_course_viewer(html, state)
+
+
+material_server.set_resolver(_material_course_root)
+material_server.set_entry_renderer(_material_render_entry)
 
 
 @router.get("/courses/{course_id}/lessons/{lesson_id}/portal")
@@ -1035,15 +1261,55 @@ async def get_course_lesson_portal(course_id: str, lesson_id: str):
     the daily session picker. Both tables carry their own `portal_path`
     written by sync_evidence.py at publish time."""
     with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM {SCHEMA}.courses WHERE id = %s", (course_id,))
+        course_row = cur.fetchone()
+        if course_row is None:
+            raise HTTPException(status_code=404, detail="course not found")
         cur.execute(
-            f"SELECT portal_path FROM {SCHEMA}.course_lessons WHERE course_id = %s AND id = %s",
-            (course_id, lesson_id),
+            f"SELECT * FROM {SCHEMA}.course_lessons WHERE course_id = %s ORDER BY updated_at ASC",
+            (course_id,),
         )
-        row = cur.fetchone()
-    if row is None:
+        lessons = _authored_lesson_order(
+            [_course_lesson_dict(r) for r in cur.fetchall()],
+            _course_dict(course_row)["chapters"],
+        )
+        progress = _lesson_progress_map(cur, course_id)
+    lesson = next((item for item in lessons if item["id"] == lesson_id), None)
+    if lesson is None:
         raise HTTPException(status_code=404, detail="lesson not found")
-    html = _read_portal_html(row.get("portal_path"))
-    return {"html": html}
+    html = _read_portal_html(lesson.get("portal_path"))
+    state = _viewer_state(course_row, lessons, progress, lesson_id, html)
+    rendered = portal_viewer.inject_course_viewer(html, state)
+    # The Desktop reader transports this HTML as a base64 data: URL, and a
+    # browser refuses a URL past ~2 MiB. Warn before a growing course silently
+    # turns the lesson page into a blank frame.
+    url_length = (len(rendered) + 2) // 3 * 4 + 22
+    if url_length > 1_900_000:
+        log.warning(
+            "portal for %s/%s renders to a %s-char data URL (limit ~2.1M); "
+            "inline fewer artifacts or serve the portal over HTTP",
+            course_id, lesson_id, url_length,
+        )
+    # Preferred transport: the loopback material origin. It gives the page a real
+    # origin (an embedded video refuses an opaque `data:` one) and lets the
+    # browser resolve relative artifact paths, so nothing is inlined as base64.
+    portal_url = ""
+    try:
+        portal_url = material_server.material_url(course_id, lesson_id)
+    except Exception:
+        log.warning("material origin unavailable for %s/%s", course_id, lesson_id,
+                    exc_info=True)
+    payload = {
+        "course_id": course_id,
+        "lesson_id": lesson_id,
+        "position": state["focusIndex"] + 1,
+        "total": len(lessons),
+        "progress_state": (progress.get(lesson_id) or {}).get("state") or "pending",
+        "portal_url": portal_url,
+    }
+    if not portal_url:
+        payload["html"] = rendered      # fallback for the base64 data: transport
+    return payload
 
 
 @router.get("/assessments")

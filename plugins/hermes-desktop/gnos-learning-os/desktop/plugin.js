@@ -75,6 +75,11 @@ function State({ children }) {
   return jsx('div', { style: { padding: 28, textAlign: 'center', color: 'var(--muted-foreground)' }, children })
 }
 
+// Lesson progress reported by the reader layer inside the portal iframe
+(dashboard/portal_viewer.py). Deduplicated per dialog session so a reopen
+does not re-post the same state.
+const portalProgressSeen = new Set()
+
 function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
   const { data, isLoading, error } = useApi(
     open ? (kind === 'session' ? `/sessions/${ids.sessionId}/portal` : `/courses/${ids.courseId}/lessons/${ids.lessonId}/portal`) : null,
@@ -83,12 +88,48 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
   )
   const html = data && typeof data === 'object' && 'html' in data ? data.html : (typeof data === 'string' ? data : null)
   const dataUrl = html ? `data:text/html;base64,${btoa(unescape(encodeURIComponent(html)))}` : null
+  // Preferred transport: the loopback material origin. A `data:` page has an
+  // opaque origin, so an embedded video refuses to play (YouTube error 153)
+  // and relative artifact paths cannot resolve. The material origin is its own
+  // loopback port, so a course document stays cross-origin to the app: it has
+  // an origin of its own without access to the app DOM.
+  const portalUrl = data && typeof data === 'object' && typeof data.portal_url === 'string' && data.portal_url ? data.portal_url : null
+  const frameUrl = portalUrl || dataUrl
   useEffect(() => {
     if (!open) return undefined
     const onKey = (event) => { if (event.key === 'Escape') onOpenChange(false) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onOpenChange])
+  // The portal viewer posts `viewed` for every lesson it shows and
+  // `completed` when the student confirms it. Persisting here is what makes
+  // "the lesson was consulted" a record in the database instead of a local,
+  // forgettable UI state. When the frame is served from the material origin its
+  // origin is known, so the message is only accepted from there; the base64
+  // `data:` fallback has no origin to check beyond the message shape.
+  const portalOrigin = (() => {
+    try { return portalUrl ? new URL(portalUrl).origin : '' } catch { return '' }
+  })()
+  useEffect(() => {
+    if (!open) return undefined
+    portalProgressSeen.clear()
+    const onMessage = (event) => {
+      if (portalOrigin && event.origin !== portalOrigin) return
+      const message = event && event.data
+      if (!message || message.type !== 'gnos:lesson-progress') return
+      if (!message.courseId || !message.lessonId) return
+      const key = `${message.lessonId}:${message.state}`
+      if (portalProgressSeen.has(key)) return
+      portalProgressSeen.add(key)
+      postApi(`/courses/${message.courseId}/lessons/${message.lessonId}/progress`, { state: message.state, source: 'portal-viewer' })
+        .then(() => {
+          if (message.state === 'completed') host.toast?.(`Aula \u201c${message.lessonTitle || message.lessonId}\u201d registrada como conclu\u00edda.`, 'success')
+        })
+        .catch((err) => host.toast?.(String(err?.message || err), 'error'))
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [open, portalOrigin])
   if (!open) return null
   return jsx('div', {
     className: 'gnos-portal-overlay',
@@ -111,8 +152,8 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
             ? jsx(State, { children: 'Carregando conteúdo da aula…' })
             : error
               ? jsx(State, { children: `Não foi possível carregar conteúdo da aula: ${String(error?.message || error)}` })
-              : dataUrl
-                ? jsx('iframe', { src: dataUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-popups', referrerPolicy: 'no-referrer', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
+              : frameUrl
+                ? jsx('iframe', { key: frameUrl, src: frameUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms', referrerPolicy: 'strict-origin-when-cross-origin', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
                 : jsx(State, { children: 'Nada em conteúdo renderizado ainda.' }),
         }),
       ],
@@ -676,6 +717,18 @@ function CourseExplorer({ courseId, onClose }) {
   const artifactsByLesson = (lessonId) => artifacts.filter((a) => a.lesson_id === lessonId)
   const artifactsByTopic = (topicId) => artifacts.filter((a) => a.topic_id === topicId && !a.lesson_id)
   const sources = Object.entries(course?.sources || {})
+  const progress = course?.progress || { total: lessons.length, completed: 0, viewed: 0, pending: lessons.length }
+  const lessonPosition = (lesson) => lesson.position || (lessons.findIndex((l) => l.id === lesson.id) + 1)
+  const lessonState = (lesson) => lesson.progress_state || 'pending'
+  const stateLabel = (state) => (state === 'completed' ? '\u2713 aula conclu\u00edda' : (state === 'viewed' ? 'consultada' : 'pendente'))
+  const markLesson = async (lesson, state) => {
+    try {
+      await postApi(`/courses/${courseId}/lessons/${lesson.id}/progress`, { state, source: 'trilha' })
+      if (state === 'completed') host.toast?.(`Aula ${lessonPosition(lesson)} registrada como conclu\u00edda.`, 'success')
+    } catch (err) {
+      host.toast?.(String(err?.message || err), 'error')
+    }
+  }
   return jsxs('div', {
     style: { display: 'grid', gap: 16 },
     children: [
@@ -687,7 +740,10 @@ function CourseExplorer({ courseId, onClose }) {
             jsxs('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', color: 'var(--muted-foreground)', fontSize: 13 }, children: [
               course?.length && jsxs('span', { children: ['◷ ', course.length] }),
               course?.depth && jsxs('span', { children: ['◉ profundidade: ', course.depth] }),
-              jsxs('span', { children: [chapters.length, ' capítulo(s) · ', lessons.length, ' aula(s) · ', artifacts.length, ' recurso(s)'] })
+              jsxs('span', { children: [chapters.length, ' capítulo(s) · ', lessons.length, ' aula(s) · ', artifacts.length, ' recurso(s)'] }),
+              jsxs('span', { style: { fontWeight: 640 }, children: ['\u2713 progresso: ', progress.completed, ' de ', progress.total, ' aula(s)'] }),
+              jsx(Badge, { state: progress.completed === progress.total && progress.total > 0 ? 'demonstrated' : 'unknown', children: progress.completed === progress.total && progress.total > 0 ? 'curso conclu\u00eddo' : `${progress.pending} pendente(s)` }),
+              progress.viewed > 0 && jsx(Badge, { state: 'unknown', children: `${progress.viewed} consultada(s)` })
             ] }),
             course?.goal && jsxs('p', { style: { margin: 0, lineHeight: 1.6, fontSize: 14 }, children: [jsx('strong', { children: 'Objetivo: ' }), course.goal] }),
             course?.vision && jsxs('p', { style: { margin: 0, lineHeight: 1.6, fontSize: 14, color: 'var(--muted-foreground)' }, children: [jsx('strong', { children: 'Visão: ' }), course.vision] }),
@@ -744,12 +800,20 @@ function CourseExplorer({ courseId, onClose }) {
                             style: { border: '1px solid var(--border)', borderRadius: 10, padding: 12 },
                             children: [
                               jsxs('button', {
-                                type: 'button', onClick: () => setOpenLesson(lessonOpen ? null : lesson.id),
+                                type: 'button',
+                                onClick: () => {
+                                  const opening = !lessonOpen
+                                  setOpenLesson(opening ? lesson.id : null)
+                                  // Abrir a aula no leitor conta como consulta.
+                                  if (opening && lessonState(lesson) !== 'completed') markLesson(lesson, 'viewed')
+                                },
                                 style: { background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--foreground)', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8, width: '100%' },
                                 children: [
                                   jsx('span', { className: `codicon codicon-chevron-${lessonOpen ? 'down' : 'right'}`, style: { fontSize: 12 } }),
+                                  jsx('span', { style: { fontWeight: 700, fontSize: 12, color: 'var(--muted-foreground)', minWidth: 22 }, children: String(lessonPosition(lesson)).padStart(2, '0') }),
                                   jsx('span', { className: 'codicon codicon-book', style: { fontSize: 13, color: 'var(--accent-2)' } }),
                                   jsx('span', { style: { fontWeight: 600, fontSize: 13.5 }, children: lesson.title }),
+                                  jsx(Badge, { state: lessonState(lesson) === 'completed' ? 'demonstrated' : 'unknown', children: stateLabel(lessonState(lesson)) }),
                                   jsx(Badge, { state: lesson.publication === 'ready' ? 'demonstrated' : 'unknown', children: lesson.publication })
                                 ]
                               }),
@@ -779,7 +843,11 @@ function CourseExplorer({ courseId, onClose }) {
                                       }, a.id))
                                     ]
                                   }),
-                                  lesson.portal_path && jsx(Navigate, { primary: true, icon: 'link-external', onClick: () => { setPortalLesson(lesson); setPortalOpen(true) }, children: 'Ver aula completa (com diagramas e código)' })
+                                  jsxs('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }, children: [
+                                    lesson.portal_path && jsx(Navigate, { primary: true, icon: 'link-external', onClick: () => { setPortalLesson(lesson); setPortalOpen(true) }, children: 'Ver aula completa (com diagramas e código)' }),
+                                    jsx(Navigate, { icon: 'check', onClick: () => markLesson(lesson, 'completed'), children: lessonState(lesson) === 'completed' ? '\u2713 Aula conclu\u00edda' : '\u2713 Concluir aula' }),
+                                    jsxs('span', { style: { fontSize: 12, color: 'var(--muted-foreground)' }, children: ['Aula ', lessonPosition(lesson), ' de ', lessons.length, ' · ', lessonState(lesson) === 'pending' ? 'não consultada' : lessonState(lesson) === 'viewed' ? 'consultada em ' + String((lesson.progress || {}).viewed_at || '').slice(0, 10) : 'concluída em ' + String((lesson.progress || {}).completed_at || '').slice(0, 10)] })
+                                  ] }),
                                 ]
                               })
                             ]
