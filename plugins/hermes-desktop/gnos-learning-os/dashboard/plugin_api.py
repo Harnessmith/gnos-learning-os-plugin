@@ -1039,7 +1039,18 @@ async def get_session_portal(session_id: str):
         row = cur.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    return {"html": _read_portal_html(row.get("portal_path"))}
+    html = _read_portal_html(row.get("portal_path"))
+    # The material server lives on the SSH backend. The Desktop asks its SSH
+    # bridge to forward this URL before assigning it to the iframe, giving
+    # embedded media a genuine HTTP origin instead of an opaque srcdoc origin.
+    result = {"html": html}
+    try:
+        result["server_portal_url"] = material_server.material_url(f"session:{session_id}")
+    except RuntimeError:
+        # Keep the authenticated HTML route usable while the material server
+        # starts or when the backend has no direct HTTP listener.
+        pass
+    return result
 
 
 def _course_dict(row: dict) -> dict:
@@ -1462,10 +1473,9 @@ async def get_course_lesson_portal(course_id: str, lesson_id: str):
     html = _read_portal_html(lesson.get("portal_path"))
     state = _viewer_state(course_row, lessons, progress, lesson_id, html)
     rendered = portal_viewer.inject_course_viewer(html, state)
-    # The rendered document is returned through the authenticated SSH backend
-    # API and assigned to iframe.srcDoc by the Desktop renderer. Do not mint a
-    # `portal_url`: `127.0.0.1` would name the client machine, not this server.
-    return {
+    # The material endpoint remains on the SSH server; the Desktop forwards it
+    # before using it as an iframe source so YouTube receives an HTTP Referer.
+    result = {
         "course_id": course_id,
         "lesson_id": lesson_id,
         "position": state["focusIndex"] + 1,
@@ -1473,6 +1483,11 @@ async def get_course_lesson_portal(course_id: str, lesson_id: str):
         "progress_state": (progress.get(lesson_id) or {}).get("state") or "pending",
         "html": rendered,
     }
+    try:
+        result["server_portal_url"] = material_server.material_url(course_id, lesson_id)
+    except RuntimeError:
+        pass
+    return result
 
 
 @router.get("/assessments")

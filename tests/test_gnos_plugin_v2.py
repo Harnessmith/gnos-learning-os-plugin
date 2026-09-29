@@ -58,11 +58,12 @@ class GnosDesktopPluginRendererTests(unittest.TestCase):
         self.assertNotIn("readFile", self.source)
         self.assertNotIn("child_process", self.source)
         self.assertNotIn("shell_exec", self.source)
-        # Lesson documents are supplied by the plugin backend as HTML. The
-        # renderer must not probe a backend-host loopback address: over SSH it
-        # may resolve to an unrelated client-local service or a blank frame.
-        self.assertNotIn("fetch(portalUrl,", self.source)
-        self.assertIn("srcDoc: html", self.source)
+        # Server-origin portals are forwarded through the Desktop SSH bridge.
+        # This preserves an HTTP Referer for YouTube, while srcDoc remains the
+        # safe fallback if bridge forwarding is unavailable.
+        self.assertIn("window.hermesDesktop?.reachPreviewUrl", self.source)
+        self.assertIn("server_portal_url", self.source)
+        self.assertIn("srcDoc: reachablePortalUrl ? undefined : html", self.source)
         # Every application read/write must go through ctx.rest, bound once in activate().
         self.assertIn("ctx.rest(path, opts)", self.source)
         self.assertIn("function rest(path, opts)", self.source)
@@ -255,6 +256,8 @@ class GnosPluginBackendTests(unittest.TestCase):
                 result = self._run(self.api.get_session_portal("session-course-test"))
             self.assertNotIn("portal_url", result)
             self.assertIn("html", result)
+            self.assertIn("server_portal_url", result)
+            self.assertTrue(result["server_portal_url"].startswith("http://127.0.0.1:"))
 
     def test_session_portal_falls_back_to_inline_html_without_a_portal_file(self):
         """When the loopback origin cannot be minted (e.g. material_server

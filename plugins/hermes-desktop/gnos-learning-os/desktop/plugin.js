@@ -87,14 +87,24 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi, postApi, h
     { enabled: Boolean(open) },
   )
   const html = data && typeof data === 'object' && 'html' in data ? data.html : (typeof data === 'string' ? data : null)
-  // Lesson HTML is rendered by the plugin backend and delivered through its
-  // authenticated REST response. Do not assign the backend host's 127.0.0.1
-  // URL to an iframe: under SSH it means the renderer's local machine, not the
-  // server that owns the lesson.
-  //
-  // `srcDoc` keeps the transport server-owned—no renderer-side filesystem
-  // access, loopback request, or CORS probe—and prevents a blank frame when
-  // the client has an unrelated service on that port.
+  const serverPortalUrl = data && typeof data === 'object' ? data.server_portal_url : null
+  const [reachablePortalUrl, setReachablePortalUrl] = useState(null)
+  // The content process cannot use the SSH server's loopback address directly:
+  // its own 127.0.0.1 is a different machine. The Desktop bridge forwards the
+  // server-only material endpoint to a client-local HTTP address. That iframe
+  // then has a real HTTP origin and YouTube receives the required Referer.
+  // If forwarding is unavailable, preserve the server-delivered srcDoc reader.
+  useEffect(() => {
+    let cancelled = false
+    setReachablePortalUrl(null)
+    if (!open || !serverPortalUrl) return () => { cancelled = true }
+    const forward = window.hermesDesktop?.reachPreviewUrl
+    if (typeof forward !== 'function') return () => { cancelled = true }
+    forward(serverPortalUrl)
+      .then((url) => { if (!cancelled && typeof url === 'string' && url.startsWith('http')) setReachablePortalUrl(url) })
+      .catch(() => { /* srcDoc fallback keeps non-video lesson material available */ })
+    return () => { cancelled = true }
+  }, [open, serverPortalUrl])
   const frameRef = useRef(null)
   const closeButtonRef = useRef(null)
   const previousFocusRef = useRef(null)
@@ -164,7 +174,17 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi, postApi, h
             : error
               ? jsx(State, { children: `Não foi possível carregar conteúdo da aula: ${String(error?.message || error)}` })
               : html
-                ? jsx('iframe', { ref: frameRef, key: `${kind}:${ids.sessionId || `${ids.courseId}/${ids.lessonId}`}`, srcDoc: html, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms', referrerPolicy: 'strict-origin-when-cross-origin', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
+                ? jsx('iframe', {
+                  ref: frameRef,
+                  key: `${kind}:${ids.sessionId || `${ids.courseId}/${ids.lessonId}`}:${reachablePortalUrl || 'inline'}`,
+                  src: reachablePortalUrl || undefined,
+                  srcDoc: reachablePortalUrl ? undefined : html,
+                  title: title || 'Aula completa',
+                  className: 'gnos-portal-frame',
+                  sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms',
+                  referrerPolicy: 'strict-origin-when-cross-origin',
+                  style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' }
+                })
                 : jsx(State, { children: 'Nada em conteúdo renderizado ainda.' }),
         }),
       ],
