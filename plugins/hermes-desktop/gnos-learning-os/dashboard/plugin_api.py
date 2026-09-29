@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import uuid
 from contextlib import contextmanager
@@ -686,6 +687,37 @@ def _session_dict(row: dict) -> dict:
     return d
 
 
+_YOUTUBE_EMBED_RE = re.compile(
+    r'<iframe[^>]+src=["\']https?://(?:www\.)?youtube(?:-nocookie)?\.com/embed/'
+    r'([A-Za-z0-9_-]{6,})[^"\']*["\'][^>]*title=["\']([^"\']+)',
+    re.IGNORECASE,
+)
+
+
+def _lesson_video_sources(portal_html: str, position: int | None = None) -> list[dict]:
+    """Expose the selected lesson's video as structured plugin-page data.
+
+    YouTube rejects an iframe nested in an Electron plugin document without a
+    normal browser HTTP referrer (error 153). The plugin therefore renders the
+    video card itself and opens the official watch page for playback.
+    """
+    sections = re.split(r'<section\s+class=["\']lesson["\'][^>]*>', portal_html, flags=re.IGNORECASE)
+    lesson_html = sections[position] if position and position < len(sections) else portal_html
+    seen: set[str] = set()
+    videos = []
+    for video_id, title in _YOUTUBE_EMBED_RE.findall(lesson_html):
+        if video_id in seen:
+            continue
+        seen.add(video_id)
+        videos.append({
+            "id": video_id,
+            "title": title.replace("&amp;", "&").strip() or "Vídeo da aula",
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "thumbnail_url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        })
+    return videos
+
+
 def _assessment_dict(row: dict) -> dict:
     return dict(row)
 
@@ -914,7 +946,17 @@ async def get_session(session_id: str):
         row = cur.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    return _session_dict(row)
+    session = _session_dict(row)
+    course_id, lesson_id = _session_target(session_id)
+    if not course_id or not lesson_id or not session.get("portal_path"):
+        return session
+    with _connect() as conn, conn.cursor() as cur:
+        plan = _session_plan_map(cur, {course_id})
+    position = (plan.get(f"{course_id}|{lesson_id}") or {}).get("position")
+    session["video_sources"] = _lesson_video_sources(
+        _read_portal_html(session["portal_path"]), position,
+    )
+    return session
 
 
 @router.get("/metrics")
