@@ -475,6 +475,20 @@ class PluginIntegrityTests(unittest.TestCase):
             self.assertTrue(Path(portal_path).is_file(),
                              "portal_path must resolve to the real file regardless of cwd")
 
+    def test_course_lesson_portal_always_includes_remote_html_fallback(self):
+        """CourseExplorer has the same SSH constraint as session lessons.
+
+        `portal_url` is a 127.0.0.1 address on the backend host; a renderer
+        connected over SSH cannot reach it. The course/lesson endpoint must
+        therefore include its rendered HTML even when the preferred material
+        URL was successfully minted.
+        """
+        source = (ROOT / "plugins" / "hermes-desktop" / "gnos-learning-os" / "dashboard" / "plugin_api.py").read_text(encoding="utf-8")
+        start = source.index("async def get_course_lesson_portal")
+        route = source[start:source.index('@router.get("/assessments")', start)]
+        self.assertIn('"html": rendered', route)
+        self.assertNotIn('if not portal_url:\n        payload["html"]', route)
+
     def test_session_portal_returns_html_fallback_for_remote_desktop(self):
         """Remote Desktop renderers cannot reach the backend's 127.0.0.1 origin.
 

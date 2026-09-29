@@ -1501,6 +1501,10 @@ async def get_course_lesson_portal(course_id: str, lesson_id: str):
     except Exception:
         log.warning("material origin unavailable for %s/%s", course_id, lesson_id,
                     exc_info=True)
+    # Always include rendered HTML. The loopback URL is preferred because it
+    # preserves a real origin for YouTube and relative assets, but it resolves
+    # on the backend host under SSH; the Desktop renderer must be able to
+    # switch to this HTML fallback when it cannot reach that loopback origin.
     payload = {
         "course_id": course_id,
         "lesson_id": lesson_id,
@@ -1508,9 +1512,8 @@ async def get_course_lesson_portal(course_id: str, lesson_id: str):
         "total": len(lessons),
         "progress_state": (progress.get(lesson_id) or {}).get("state") or "pending",
         "portal_url": portal_url,
+        "html": rendered,
     }
-    if not portal_url:
-        payload["html"] = rendered      # fallback for the base64 data: transport
     return payload
 
 
