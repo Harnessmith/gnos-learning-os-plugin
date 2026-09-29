@@ -1045,7 +1045,7 @@ function Timeline() {
   return jsx(TimelinePage, { useApi, mutateApi, postApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, ListRow, css, kindIcon })
 }
 function Lesson() {
-  return jsx(LessonPage, { useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, PortalDialog })
+  return jsx(LessonPage, { useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, RichText, PortalDialog })
 }
 const artifactIcon = { video: 'device-camera-video', diagram: 'type-hierarchy', simulation: 'pulse', pdf: 'file-pdf', image: 'file-media', document: 'file-text' }
 function Lab() {
