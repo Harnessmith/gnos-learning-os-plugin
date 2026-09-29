@@ -1049,9 +1049,16 @@ async def get_session_portal(session_id: str):
         portal_url = material_server.material_url(f"session:{session_id}")
     except Exception:
         log.warning("material origin unavailable for session %s", session_id, exc_info=True)
+    # Always include an HTML fallback. A locally running Desktop can reach the
+    # loopback material origin (needed by YouTube and relative assets), but an
+    # SSH-connected Desktop cannot: its renderer's 127.0.0.1 is not this
+    # backend. The client probes the URL and uses this HTML instead of leaving
+    # a white iframe in that remote case.
+    html = _read_portal_html(row.get("portal_path"))
+    if portal_url and html:
+        return {"portal_url": portal_url, "html": html}
     if portal_url:
         return {"portal_url": portal_url}
-    html = _read_portal_html(row.get("portal_path"))     # fallback: data: transport
     return {"html": html}
 
 

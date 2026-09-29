@@ -475,6 +475,56 @@ class PluginIntegrityTests(unittest.TestCase):
             self.assertTrue(Path(portal_path).is_file(),
                              "portal_path must resolve to the real file regardless of cwd")
 
+    def test_session_portal_returns_html_fallback_for_remote_desktop(self):
+        """Remote Desktop renderers cannot reach the backend's 127.0.0.1 origin.
+
+        The API must therefore include the rendered HTML alongside the loopback
+        URL, so the client can fall back to a data URL instead of showing a
+        blank iframe.
+        """
+        temp_root = plugin_api.WORKSPACE_ROOT / "learners" / f"_test_remote_portal_{uuid.uuid4().hex}"
+        try:
+            temp_root.mkdir(parents=True)
+            portal = temp_root / "portal.html"
+            portal.write_text("<html><body><h1>Material remoto</h1></body></html>", encoding="utf-8")
+            with plugin_api._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE {self.schema}.sessions SET portal_path = %s "
+                    "WHERE id = 'session-devops-active'",
+                    (str(portal),),
+                )
+                conn.commit()
+
+            from unittest.mock import patch
+            with patch.object(plugin_api, "_read_portal_html", return_value="<h1>Material remoto</h1>"):
+                result = asyncio.run(plugin_api.get_session_portal("session-devops-active"))
+        finally:
+            import shutil
+            shutil.rmtree(temp_root, ignore_errors=True)
+
+        self.assertTrue(result["portal_url"].startswith("http://127.0.0.1:"))
+        self.assertIn("Material remoto", result["html"])
+
+    def test_material_server_allows_renderer_read_probe(self):
+        """The renderer probes a loopback portal before using it as iframe src."""
+        from urllib.request import urlopen
+        server = plugin_api.material_server
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            (root / "portal").mkdir()
+            (root / "portal" / "index.html").write_text("<h1>probe</h1>", encoding="utf-8")
+            token = f"test-{uuid.uuid4().hex}"
+            server._tokens[token] = {
+                "root": root.resolve(), "portal_rel": "portal/index.html",
+                "course_id": "test", "expires": float("inf"),
+            }
+            try:
+                origin = server._ensure_running()
+                with urlopen(f"{origin}/portal/{token}/portal/index.html", timeout=3) as response:
+                    self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "*")
+            finally:
+                server._tokens.pop(token, None)
+
 
 if __name__ == "__main__":
     unittest.main()

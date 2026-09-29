@@ -58,8 +58,11 @@ class GnosDesktopPluginRendererTests(unittest.TestCase):
         self.assertNotIn("readFile", self.source)
         self.assertNotIn("child_process", self.source)
         self.assertNotIn("shell_exec", self.source)
-        self.assertNotIn("fetch(", self.source)
-        # Every read/write must go through ctx.rest, bound once in activate().
+        # The sole exception is a CORS read-probe of the token-scoped
+        # loopback material URL. It selects the SSH-safe HTML fallback; it
+        # never reads user files or calls arbitrary endpoints.
+        self.assertEqual(self.source.count("fetch(portalUrl,"), 1)
+        # Every application read/write must go through ctx.rest, bound once in activate().
         self.assertIn("ctx.rest(path, opts)", self.source)
         self.assertIn("function rest(path, opts)", self.source)
 
@@ -249,10 +252,12 @@ class GnosPluginBackendTests(unittest.TestCase):
                     (str(portal), now),
                 )
                 conn.commit()
-            result = self._run(self.api.get_session_portal("session-course-test"))
+            from unittest.mock import patch
+            with patch.object(self.api, "_read_portal_html", return_value="<iframe src='https://www.youtube-nocookie.com/embed/x'></iframe>"):
+                result = self._run(self.api.get_session_portal("session-course-test"))
             self.assertIn("portal_url", result)
             self.assertTrue(result["portal_url"].startswith("http://127.0.0.1:"))
-            self.assertNotIn("html", result)
+            self.assertIn("html", result)
 
     def test_session_portal_falls_back_to_inline_html_without_a_portal_file(self):
         """When the loopback origin cannot be minted (e.g. material_server

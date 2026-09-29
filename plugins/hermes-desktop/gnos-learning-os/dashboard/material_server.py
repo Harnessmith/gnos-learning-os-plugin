@@ -148,6 +148,10 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
+        # The Desktop renderer probes this read-only, token-scoped URL before
+        # framing it. Explicit CORS permits that probe without granting write
+        # access or relaxing the filesystem/token checks above.
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         if not head_only and body:
             self.wfile.write(body)

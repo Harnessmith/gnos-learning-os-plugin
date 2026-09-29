@@ -80,7 +80,7 @@ function State({ children }) {
 // does not re-post the same state.
 const portalProgressSeen = new Set()
 
-function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
+function PortalDialog({ open, onOpenChange, title, kind, ids, useApi, postApi, host }) {
   const { data, isLoading, error } = useApi(
     open ? (kind === 'session' ? `/sessions/${ids.sessionId}/portal` : `/courses/${ids.courseId}/lessons/${ids.lessonId}/portal`) : null,
     ['portal', kind, ids.sessionId || `${ids.courseId}/${ids.lessonId}`],
@@ -94,7 +94,41 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
   // loopback port, so a course document stays cross-origin to the app: it has
   // an origin of its own without access to the app DOM.
   const portalUrl = data && typeof data === 'object' && typeof data.portal_url === 'string' && data.portal_url ? data.portal_url : null
-  const frameUrl = portalUrl || dataUrl
+  const [frameUrl, setFrameUrl] = useState(null)
+  const [isResolvingFrame, setIsResolvingFrame] = useState(false)
+  // An SSH-connected renderer cannot reach the backend process's 127.0.0.1.
+  // Probe it before assigning iframe.src: use the real origin locally (so
+  // YouTube and relative assets work), otherwise use the backend-provided HTML
+  // fallback rather than display an empty white iframe.
+  useEffect(() => {
+    let cancelled = false
+    if (!open) {
+      setFrameUrl(null)
+      setIsResolvingFrame(false)
+      return undefined
+    }
+    if (!portalUrl || !html) {
+      setFrameUrl(portalUrl || dataUrl)
+      setIsResolvingFrame(false)
+      return undefined
+    }
+    setFrameUrl(null)
+    setIsResolvingFrame(true)
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), 2500)
+    fetch(portalUrl, { signal: controller.signal, credentials: 'omit' })
+      .then((response) => {
+        if (!response.ok) throw new Error(`material server returned ${response.status}`)
+        if (!cancelled) setFrameUrl(portalUrl)
+      })
+      .catch(() => { if (!cancelled) setFrameUrl(dataUrl) })
+      .finally(() => { if (!cancelled) setIsResolvingFrame(false) })
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [open, portalUrl, dataUrl, html])
   const frameRef = useRef(null)
   const closeButtonRef = useRef(null)
   const previousFocusRef = useRef(null)
@@ -163,6 +197,8 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
             ? jsx(State, { children: 'Carregando conteúdo da aula…' })
             : error
               ? jsx(State, { children: `Não foi possível carregar conteúdo da aula: ${String(error?.message || error)}` })
+              : isResolvingFrame
+              ? jsx(State, { children: 'Preparando conteúdo da aula…' })
               : frameUrl
                 ? jsx('iframe', { ref: frameRef, key: frameUrl, src: frameUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms', referrerPolicy: 'strict-origin-when-cross-origin', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
                 : jsx(State, { children: 'Nada em conteúdo renderizado ainda.' }),
