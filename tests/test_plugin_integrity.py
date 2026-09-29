@@ -487,7 +487,7 @@ class PluginIntegrityTests(unittest.TestCase):
         start = source.index("async def get_course_lesson_portal")
         route = source[start:source.index('@router.get("/assessments")', start)]
         self.assertIn('"html": rendered', route)
-        self.assertNotIn('if not portal_url:\n        payload["html"]', route)
+        self.assertNotIn('"portal_url"', route)
 
     def test_session_portal_returns_html_fallback_for_remote_desktop(self):
         """Remote Desktop renderers cannot reach the backend's 127.0.0.1 origin.
@@ -516,8 +516,8 @@ class PluginIntegrityTests(unittest.TestCase):
             import shutil
             shutil.rmtree(temp_root, ignore_errors=True)
 
-        self.assertTrue(result["portal_url"].startswith("http://127.0.0.1:"))
         self.assertIn("Material remoto", result["html"])
+        self.assertNotIn("portal_url", result)
 
     def test_material_server_allows_renderer_read_probe(self):
         """The renderer probes a loopback portal before using it as iframe src."""

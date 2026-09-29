@@ -1027,39 +1027,19 @@ async def get_metrics():
 
 @router.get("/sessions/{session_id}/portal")
 async def get_session_portal(session_id: str):
-    """Full rendered lesson HTML (diagrams, KaTeX, highlighted code) for the
-    'Ver aula completa' button.
+    """Return a rendered lesson document from the SSH backend.
 
-    Preferred transport: the loopback material origin (see
-    `_material_course_root`/`material_server`), the same one the course/lesson
-    portal route uses. A session document embeds cited YouTube videos, and an
-    embedded video refuses to play behind a `data:` URL — that URL has an
-    opaque origin, and YouTube's player answers "Erro 153 (configuration
-    error)" for any origin it cannot identify. `data:` HTML is kept only as a
-    fallback for when the loopback origin cannot be minted (e.g. no portal on
-    disk), matching the lesson-portal route's contract."""
+    The Desktop renderer receives this HTML through the authenticated API; it
+    must never navigate to the server process' 127.0.0.1 address, which is a
+    different machine when connected through SSH.
+    """
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT portal_path FROM {SCHEMA}.sessions WHERE id = %s", (session_id,))
         row = cur.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    portal_url = ""
-    try:
-        portal_url = material_server.material_url(f"session:{session_id}")
-    except Exception:
-        log.warning("material origin unavailable for session %s", session_id, exc_info=True)
-    # Always include an HTML fallback. A locally running Desktop can reach the
-    # loopback material origin (needed by YouTube and relative assets), but an
-    # SSH-connected Desktop cannot: its renderer's 127.0.0.1 is not this
-    # backend. The client probes the URL and uses this HTML instead of leaving
-    # a white iframe in that remote case.
-    html = _read_portal_html(row.get("portal_path"))
-    if portal_url and html:
-        return {"portal_url": portal_url, "html": html}
-    if portal_url:
-        return {"portal_url": portal_url}
-    return {"html": html}
+    return {"html": _read_portal_html(row.get("portal_path"))}
 
 
 def _course_dict(row: dict) -> dict:
@@ -1482,39 +1462,17 @@ async def get_course_lesson_portal(course_id: str, lesson_id: str):
     html = _read_portal_html(lesson.get("portal_path"))
     state = _viewer_state(course_row, lessons, progress, lesson_id, html)
     rendered = portal_viewer.inject_course_viewer(html, state)
-    # The Desktop reader transports this HTML as a base64 data: URL, and a
-    # browser refuses a URL past ~2 MiB. Warn before a growing course silently
-    # turns the lesson page into a blank frame.
-    url_length = (len(rendered) + 2) // 3 * 4 + 22
-    if url_length > 1_900_000:
-        log.warning(
-            "portal for %s/%s renders to a %s-char data URL (limit ~2.1M); "
-            "inline fewer artifacts or serve the portal over HTTP",
-            course_id, lesson_id, url_length,
-        )
-    # Preferred transport: the loopback material origin. It gives the page a real
-    # origin (an embedded video refuses an opaque `data:` one) and lets the
-    # browser resolve relative artifact paths, so nothing is inlined as base64.
-    portal_url = ""
-    try:
-        portal_url = material_server.material_url(course_id, lesson_id)
-    except Exception:
-        log.warning("material origin unavailable for %s/%s", course_id, lesson_id,
-                    exc_info=True)
-    # Always include rendered HTML. The loopback URL is preferred because it
-    # preserves a real origin for YouTube and relative assets, but it resolves
-    # on the backend host under SSH; the Desktop renderer must be able to
-    # switch to this HTML fallback when it cannot reach that loopback origin.
-    payload = {
+    # The rendered document is returned through the authenticated SSH backend
+    # API and assigned to iframe.srcDoc by the Desktop renderer. Do not mint a
+    # `portal_url`: `127.0.0.1` would name the client machine, not this server.
+    return {
         "course_id": course_id,
         "lesson_id": lesson_id,
         "position": state["focusIndex"] + 1,
         "total": len(lessons),
         "progress_state": (progress.get(lesson_id) or {}).get("state") or "pending",
-        "portal_url": portal_url,
         "html": rendered,
     }
-    return payload
 
 
 @router.get("/assessments")

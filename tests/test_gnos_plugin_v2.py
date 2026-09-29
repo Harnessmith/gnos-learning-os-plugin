@@ -232,12 +232,9 @@ class GnosPluginBackendTests(unittest.TestCase):
                 self.api.WORKSPACE_ROOT = original_workspace_root
         self.assertIn("Conteúdo da aula", html)
 
-    def test_session_portal_prefers_the_loopback_origin_over_a_data_url(self):
-        """A `data:` transport has an opaque origin, so an embedded YouTube
-        video answers Erro 153 (see material_server.py's own rationale).
-        `/sessions/{id}/portal` must mint the same real-origin transport the
-        course/lesson portal route already uses, falling back to inline
-        `html` only when no portal file exists on disk to serve."""
+    def test_session_portal_is_served_exclusively_by_the_ssh_backend(self):
+        """Lesson HTML must cross the authenticated API, never a backend-local
+        `127.0.0.1` URL that the SSH-connected Desktop cannot address."""
         with TemporaryDirectory() as tmp:
             portal = Path(tmp) / "portal" / "index.html"
             portal.parent.mkdir(parents=True)
@@ -256,8 +253,7 @@ class GnosPluginBackendTests(unittest.TestCase):
             from unittest.mock import patch
             with patch.object(self.api, "_read_portal_html", return_value="<iframe src='https://www.youtube-nocookie.com/embed/x'></iframe>"):
                 result = self._run(self.api.get_session_portal("session-course-test"))
-            self.assertIn("portal_url", result)
-            self.assertTrue(result["portal_url"].startswith("http://127.0.0.1:"))
+            self.assertNotIn("portal_url", result)
             self.assertIn("html", result)
 
     def test_session_portal_falls_back_to_inline_html_without_a_portal_file(self):
