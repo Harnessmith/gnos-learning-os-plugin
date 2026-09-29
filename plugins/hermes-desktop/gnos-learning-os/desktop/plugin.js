@@ -7,7 +7,7 @@
 // via ctx.rest. No page reads GNOS course files, learner state, or executes shell —
 // see ../contracts.md for the full contract.
 import { PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, host, useQuery, queryClient } from '@hermes/plugin-sdk'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 // Endpoint contract markers kept in the canonical entrypoint for integrity checks:
@@ -95,11 +95,20 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
   // an origin of its own without access to the app DOM.
   const portalUrl = data && typeof data === 'object' && typeof data.portal_url === 'string' && data.portal_url ? data.portal_url : null
   const frameUrl = portalUrl || dataUrl
+  const frameRef = useRef(null)
+  const closeButtonRef = useRef(null)
+  const previousFocusRef = useRef(null)
   useEffect(() => {
     if (!open) return undefined
+    previousFocusRef.current = document.activeElement
+    const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0)
     const onKey = (event) => { if (event.key === 'Escape') onOpenChange(false) }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.clearTimeout(focusTimer)
+      window.removeEventListener('keydown', onKey)
+      previousFocusRef.current?.focus?.()
+    }
   }, [open, onOpenChange])
   // The portal viewer posts `viewed` for every lesson it shows and
   // `completed` when the student confirms it. Persisting here is what makes
@@ -115,6 +124,7 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
     portalProgressSeen.clear()
     const onMessage = (event) => {
       if (portalOrigin && event.origin !== portalOrigin) return
+      if (event.source !== frameRef.current?.contentWindow) return
       const message = event && event.data
       if (!message || message.type !== 'gnos:lesson-progress') return
       if (!message.courseId || !message.lessonId) return
@@ -137,13 +147,14 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
     onClick: (event) => { if (event.target === event.currentTarget) onOpenChange(false) },
     children: jsxs('div', {
       className: 'gnos-portal-dialog',
+      role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'gnos-portal-title',
       style: { width: '92vw', maxWidth: 1200, height: '92vh', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 16, padding: 0, display: 'flex', flexDirection: 'column', boxShadow: '0 30px 90px rgba(0,0,0,.5)' },
       children: [
         jsxs('div', {
           style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)' },
           children: [
-            jsx('strong', { style: { fontSize: 16 }, children: title || 'Aula completa' }),
-            jsx('button', { type: 'button', className: 'gnos-action', onClick: () => onOpenChange(false), 'aria-label': 'Fechar', style: { border: '1px solid var(--border)', background: 'transparent', color: 'var(--foreground)', borderRadius: 8, width: 32, height: 32, cursor: 'pointer', fontSize: 16 }, children: '\u2715' }),
+            jsx('strong', { id: 'gnos-portal-title', style: { fontSize: 16 }, children: title || 'Aula completa' }),
+            jsx('button', { ref: closeButtonRef, type: 'button', className: 'gnos-action', onClick: () => onOpenChange(false), 'aria-label': 'Fechar', style: { border: '1px solid var(--border)', background: 'transparent', color: 'var(--foreground)', borderRadius: 8, width: 32, height: 32, cursor: 'pointer', fontSize: 16 }, children: '\u2715' }),
           ],
         }),
         jsx('div', {
@@ -153,7 +164,7 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi }) {
             : error
               ? jsx(State, { children: `Não foi possível carregar conteúdo da aula: ${String(error?.message || error)}` })
               : frameUrl
-                ? jsx('iframe', { key: frameUrl, src: frameUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms', referrerPolicy: 'strict-origin-when-cross-origin', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
+                ? jsx('iframe', { ref: frameRef, key: frameUrl, src: frameUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms', referrerPolicy: 'strict-origin-when-cross-origin', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
                 : jsx(State, { children: 'Nada em conteúdo renderizado ainda.' }),
         }),
       ],
@@ -189,24 +200,32 @@ function AssessmentsPage({ useApi, postApi, host, Page, Loading, ErrorState, Emp
   const { data: historyData } = useApi(historyId ? `/assessments/${historyId}/history` : null, ['assessment-history', historyId], { enabled: Boolean(historyId) })
   const [busy, setBusy] = useState(null)
   const submit = async (assessment) => {
+    const outcome = outcomes[assessment.id]
+    if (!outcome) { host.toast?.('Escolha o resultado da tentativa antes de registrar.', 'error'); return }
     setBusy(assessment.id)
-    const outcome = outcomes[assessment.id] || 'correct'
     try {
       await postApi(`/assessments/${assessment.id}/submit`, { attempt_id: `${assessment.id}-${Date.now()}`, outcome, help_used: outcome.includes('hint') ? 'pista' : null, notes: 'Registrado pelo GNOS Desktop' })
       host.toast?.('Tentativa registrada.', 'success')
     } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(null) }
   }
-  return jsx(Page, { label: 'Evidência, não só nota', title: 'Avaliações', subtitle: 'Cada tentativa preserva resultado, ajuda utilizada e força da evidência.', children: isLoading ? jsx(Loading, { label: 'avaliações' }) : error ? jsx(ErrorState, { label: 'avaliações', error }) : !items.length ? jsx(Empty, { label: 'avaliações' }) : jsx('div', { style: css.grid, children: items.map((a) => jsx(Card, { title: a.title, icon: kindIcon[a.type] || 'checklist', children: jsxs('div', { children: [jsx(Badge, { state: a.status, children: `${a.type} · ${a.status}` }), jsx('p', { style: { fontSize: 13.5, lineHeight: 1.5 }, children: a.result || 'Aguardando tentativa' }), jsx('div', { style: { color: 'var(--muted-foreground)', fontSize: 12.5, marginBottom: 14 }, children: `Ajuda: ${a.help_used || '—'} · Evidências: ${a.evidence_count}` }), jsxs('label', { style: { display: 'grid', gap: 6, color: 'var(--muted-foreground)', fontSize: 12 }, children: ['Resultado da nova tentativa', jsx('select', { className: 'gnos-select', value: outcomes[a.id] || 'correct', onChange: (event) => setOutcomes({ ...outcomes, [a.id]: event.target.value }), style: { ...css.ghost, width: '100%' }, children: [jsx('option', { value: 'correct', children: 'Correto sem ajuda' }), jsx('option', { value: 'partial', children: 'Parcial' }), jsx('option', { value: 'incorrect', children: 'Incorreto' }), jsx('option', { value: 'correct_with_hint', children: 'Correto com pista' }), jsx('option', { value: 'misconception', children: 'Misconception detectada' }), jsx('option', { value: 'transfer_success', children: 'Transferência bem-sucedida' })] })] }), jsx('div', { style: { marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }, children: [jsx(Navigate, { primary: true, icon: 'save', onClick: () => submit(a), children: busy === a.id ? 'Registrando…' : 'Registrar tentativa' }), jsx(Navigate, { icon: 'history', onClick: () => setHistoryId(historyId === a.id ? null : a.id), children: historyId === a.id ? 'Fechar histórico' : 'Ver histórico' })] }), historyId === a.id && jsx('div', { style: { borderTop: '1px solid var(--border)', marginTop: 14, paddingTop: 12 }, children: !historyData?.attempts?.length ? jsx('small', { style: { color: 'var(--muted-foreground)' }, children: 'Nenhuma tentativa registrada.' }) : historyData.attempts.map((attempt) => jsxs('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '6px 0', fontSize: 12.5 }, children: [jsx(Badge, { state: attempt.outcome === 'correct' || attempt.outcome === 'transfer_success' ? 'demonstrated' : 'repair-needed', children: attempt.outcome }), jsx('span', { style: { color: 'var(--muted-foreground)' }, children: attempt.created_at?.slice(0, 10) })] }, attempt.id)) })] }) }, a.id)) }) })
+  return jsx(Page, { label: 'Evidência, não só nota', title: 'Avaliações', subtitle: 'Cada tentativa preserva resultado, ajuda utilizada e força da evidência.', children: isLoading ? jsx(Loading, { label: 'avaliações' }) : error ? jsx(ErrorState, { label: 'avaliações', error }) : !items.length ? jsx(Empty, { label: 'avaliações' }) : jsx('div', { style: css.grid, children: items.map((a) => { const outcome = outcomes[a.id] || ''; return jsx(Card, { title: a.title, icon: kindIcon[a.type] || 'checklist', children: jsxs('div', { children: [jsx(Badge, { state: a.status, children: `${a.type} · ${a.status}` }), jsx('p', { style: { fontSize: 13.5, lineHeight: 1.5 }, children: a.result || 'Aguardando tentativa' }), jsx('div', { style: { color: 'var(--muted-foreground)', fontSize: 12.5, marginBottom: 14 }, children: `Ajuda: ${a.help_used || '—'} · Evidências: ${a.evidence_count}` }), jsxs('label', { style: { display: 'grid', gap: 6, color: 'var(--muted-foreground)', fontSize: 12 }, children: ['Resultado da nova tentativa', jsx('select', { className: 'gnos-select', value: outcome, onChange: (event) => setOutcomes({ ...outcomes, [a.id]: event.target.value }), style: { ...css.ghost, width: '100%' }, children: [jsx('option', { value: '', children: 'Selecione o resultado…' }), jsx('option', { value: 'correct', children: 'Correto sem ajuda' }), jsx('option', { value: 'partial', children: 'Parcial' }), jsx('option', { value: 'incorrect', children: 'Incorreto' }), jsx('option', { value: 'correct_with_hint', children: 'Correto com pista' }), jsx('option', { value: 'misconception', children: 'Misconception detectada' }), jsx('option', { value: 'transfer_success', children: 'Transferência bem-sucedida' })] })] }), jsx('div', { style: { marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }, children: [jsx(Navigate, { primary: true, icon: 'save', disabled: busy === a.id || !outcome, onClick: () => submit(a), children: busy === a.id ? 'Registrando…' : 'Registrar tentativa' }), jsx(Navigate, { icon: 'history', onClick: () => setHistoryId(historyId === a.id ? null : a.id), children: historyId === a.id ? 'Fechar histórico' : 'Ver histórico' })] }), historyId === a.id && jsx('div', { style: { marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }, children: (historyData?.attempts || []).length ? historyData.attempts.map((item) => jsx('div', { style: { fontSize: 12.5, padding: '6px 0' }, children: `${item.outcome} · ${item.created_at}` }, item.id)) : 'Nenhuma tentativa registrada.' })] }) }, a.id) }) }) })
 }
 
 // Inlined from pages/lab.js
 
 function LabPage({ useApi, postApi, host, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, ListRow, css }) {
   const labs = useApi('/labs', ['labs'])
-  const labId = labs.data?.labs?.[0]?.id
+  const [selectedLabId, setSelectedLabId] = useState(() => globalThis.sessionStorage?.getItem('gnos.selected-lab') || '')
+  const availableLabs = labs.data?.labs || []
+  const labId = selectedLabId || availableLabs[0]?.id
   const detail = useApi(labId ? `/labs/${labId}` : null, ['lab', labId])
   const [busy, setBusy] = useState(null)
+  const selectLab = (id) => {
+    setSelectedLabId(id)
+    globalThis.sessionStorage?.setItem('gnos.selected-lab', id)
+  }
   const act = async (kind) => {
+    if (!labId) return
     setBusy(kind)
     try { await postApi(`/labs/${labId}/${kind}`); host.toast?.(`Ação ${kind} concluída.`, 'success') } catch (e) { host.toast?.(String(e?.message || e), 'error') } finally { setBusy(null) }
   }
@@ -215,180 +234,47 @@ function LabPage({ useApi, postApi, host, Page, Loading, ErrorState, Empty, Card
   const lab = detail.data
   if (!lab) return jsx(Page, { label: 'Laboratório', title: 'Laboratório', children: jsx(Empty, { label: 'laboratório' }) })
   const actions = jsxs('div', { style: { display: 'flex', gap: 8 }, children: [
-    jsx(Navigate, { icon: 'refresh', onClick: () => act('reset'), children: busy === 'reset' ? 'Resetando…' : 'Resetar' }),
-    lab.status === 'not_started' ? jsx(Navigate, { primary: true, icon: 'play', onClick: () => act('start'), children: busy === 'start' ? 'Iniciando…' : 'Iniciar ambiente' }) : jsx(Navigate, { primary: true, icon: 'run-all', onClick: () => act('check'), children: busy === 'check' ? 'Executando…' : 'Executar checks' })
+    jsx(Navigate, { icon: 'refresh', disabled: Boolean(busy), onClick: () => act('reset'), children: busy === 'reset' ? 'Resetando…' : 'Resetar' }),
+    lab.status === 'not_started' ? jsx(Navigate, { primary: true, icon: 'play', disabled: Boolean(busy), onClick: () => act('start'), children: busy === 'start' ? 'Iniciando…' : 'Iniciar ambiente' }) : jsx(Navigate, { primary: true, icon: 'run-all', disabled: Boolean(busy), onClick: () => act('check'), children: busy === 'check' ? 'Executando…' : 'Executar checks' })
   ] })
   return jsx(Page, {
     label: 'Sandbox restrito · histórico preservado', title: lab.title, subtitle: lab.objective, actions,
-    children: jsxs('div', {
-      style: { display: 'grid', gap: 16 }, children: [
-        jsxs('section', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(280px,.8fr) minmax(0,1.3fr)', gap: 16 }, children: [
-          jsx(Card, { title: 'Desafio', icon: 'target', children: jsxs('div', { children: [jsx('p', { style: { lineHeight: 1.6, marginTop: 0 }, children: lab.task }), jsx('p', { style: css.eyebrow, children: 'Estado inicial' }), jsx('p', { style: { ...css.subtitle, marginBottom: 12 }, children: lab.initial_state }), jsx('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' }, children: (lab.allowed_tools || []).map((tool) => jsx(Badge, { state: 'exposed', children: tool }, tool)) })] }) }),
-        jsx(Card, {
-          title: 'Ambiente', icon: 'beaker', accent: true, children: jsxs('div', {
-            children: [
-              jsx(Badge, { state: lab.status, children: lab.status }),
-              jsx(TerminalChrome, { children: lab.terminal_output || '$ (ambiente ainda não iniciado)' }),
-              jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: lab.expected_behavior })
-            ]
-          })
-        })] }),
-        jsx(Card, { title: 'Checks determinísticos', icon: 'verified', children: jsxs('div', { children: [jsx('p', { style: { margin: '0 0 8px', lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: lab.evidence_note }), (lab.checks || []).length ? lab.checks.map((check) => jsx(ListRow, { icon: check.passed ? 'pass-filled' : 'error', title: check.check_name, detail: check.output, action: jsx(Badge, { state: check.passed ? 'passed' : 'failed', children: check.passed ? 'pass' : 'fail' }) }, check.id)) : (lab.deterministic_checks || []).map((check) => jsx(ListRow, { icon: 'circle-outline', title: check.name, detail: check.expect, action: jsx(Badge, { state: 'planned', children: 'pendente' }) }, check.name))] }) })
-      ]
-    })
+    children: jsxs('div', { style: { display: 'grid', gap: 16 }, children: [
+      labs.data?.labs?.length > 1 && jsx('label', { style: { display: 'grid', gap: 6, maxWidth: 520, color: 'var(--muted-foreground)', fontSize: 12 }, children: ['Ambiente de prática', jsx('select', { className: 'gnos-select', value: labId || '', onChange: (event) => selectLab(event.target.value), style: { ...css.ghost, width: '100%' }, children: labs.data.labs.map((item) => jsx('option', { value: item.id, children: `${item.title} · ${item.status}` }, item.id)) })] }),
+      jsxs('section', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(280px,.8fr) minmax(0,1.3fr)', gap: 16 }, children: [
+        jsx(Card, { title: 'Desafio', icon: 'target', children: jsxs('div', { children: [jsx('p', { style: { lineHeight: 1.6, marginTop: 0 }, children: lab.task }), jsx('p', { style: css.eyebrow, children: 'Estado inicial' }), jsx('p', { style: { ...css.subtitle, marginBottom: 12 }, children: lab.initial_state }), jsx('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' }, children: (lab.allowed_tools || []).map((tool) => jsx(Badge, { state: 'exposed', children: tool }, tool)) })] }) }),
+        jsx(Card, { title: 'Ambiente', icon: 'beaker', accent: true, children: jsxs('div', { children: [jsx(Badge, { state: lab.status, children: lab.status }), jsx(TerminalChrome, { children: lab.terminal_output || '$ (ambiente ainda não iniciado)' }), jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: lab.expected_behavior })] }) })
+      ] }),
+      jsx(Card, { title: 'Checks determinísticos', icon: 'verified', children: jsxs('div', { children: [jsx('p', { style: { margin: '0 0 8px', lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: lab.evidence_note }), (lab.checks || []).length ? lab.checks.map((check) => jsx(ListRow, { icon: check.passed ? 'pass-filled' : 'error', title: check.check_name, detail: check.output, action: jsx(Badge, { state: check.passed ? 'passed' : 'failed', children: check.passed ? 'pass' : 'fail' }) }, check.id)) : (lab.deterministic_checks || []).map((check) => jsx(ListRow, { icon: 'circle-outline', title: check.name, detail: check.expect, action: jsx(Badge, { state: 'planned', children: 'pendente' }) }, check.name))] }) })
+    ] })
   })
+}
+
+function TerminalChrome({ children }) {
+  return jsxs('div', { style: { borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)', margin: '14px 0' }, children: [jsx('div', { style: { padding: '9px 12px', background: 'color-mix(in srgb, var(--foreground) 6%, transparent)', borderBottom: '1px solid var(--border)', color: 'var(--muted-foreground)', fontSize: 12 }, children: 'Terminal do ambiente (saída somente leitura)' }), jsx('pre', { 'aria-label': 'Saída do terminal', style: { margin: 0, padding: 14, overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 12.5, lineHeight: 1.6, background: 'color-mix(in srgb, var(--foreground) 3%, transparent)' }, children })] })
 }
 
 // Inlined from pages/lesson.js
 
-function LessonPage({ useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, PortalDialog }) {
+function LessonPage({ useApi, postApi, host, BASE, Page, Loading, Empty, Card, Badge, Navigate, css, RichText, PortalDialog }) {
   const { data: today, isLoading: isLoadingToday } = useApi('/today', ['today'])
   const { data: sessionsData, isLoading: isLoadingSessions } = useApi('/sessions', ['sessions'])
   const sessions = sessionsData?.sessions || []
-  const [selectedId, setSelectedId] = useState(null)
+  const [selectedId, setSelectedId] = useState(() => {
+    const query = globalThis.location?.search || globalThis.location?.hash?.split('?')[1] || ''
+    return new URLSearchParams(query).get('session') || globalThis.sessionStorage?.getItem('gnos.selected-session') || null
+  })
   const sessionId = selectedId || today?.session_id
   const { data: session, isLoading: isLoadingSession } = useApi(sessionId ? `/sessions/${sessionId}` : null, ['session', sessionId])
   const [busy, setBusy] = useState(false)
   const [portalOpen, setPortalOpen] = useState(false)
-  const changeStatus = async (kind) => {
-    setBusy(true)
-    try {
-      if (kind === 'start') await postApi(`/sessions/${sessionId}/start`)
-      else await postApi(`/sessions/${sessionId}/complete`, { actual_topic: session.actual_topic || session.planned_topic, actual_duration: session.planned_duration, next_step: session.next_step })
-      host.toast?.(kind === 'start' ? 'Aula iniciada.' : 'Aula concluída.', 'success')
-    } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
-  }
+  const selectSession = (id) => { setSelectedId(id); globalThis.sessionStorage?.setItem('gnos.selected-session', id) }
+  const changeStatus = async (kind) => { setBusy(true); try { if (kind === 'start') await postApi(`/sessions/${sessionId}/start`); else await postApi(`/sessions/${sessionId}/complete`, { actual_topic: session.actual_topic || session.planned_topic, actual_duration: session.planned_duration, next_step: session.next_step }); host.toast?.(kind === 'start' ? 'Aula iniciada.' : 'Aula concluída.', 'success') } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) } }
   if (isLoadingToday || isLoadingSessions || isLoadingSession) return jsx(Page, { label: '…', title: 'Aula', children: jsx(Loading, { label: 'aula' }) })
   if (!session) return jsx(Page, { label: 'Aula', title: 'Aula', children: jsx(Empty, { label: 'aula' }) })
-  const picker = sessions.length > 1 && jsx('label', {
-    style: { display: 'grid', gap: 4, color: 'var(--muted-foreground)', fontSize: 12, minWidth: 260 },
-    children: [
-      'Aula de hoje',
-      jsx('select', {
-        className: 'gnos-select', value: sessionId || '', style: { ...css.ghost, width: '100%' },
-        onChange: (event) => setSelectedId(event.target.value),
-        children: sessions.map((s) => jsx('option', {
-          value: s.id,
-          children: `${s.track_title ? s.track_title + ' · ' : ''}${s.sequence_label ? s.sequence_label + ' · ' : ''}${s.actual_topic || s.planned_topic}${s.status === 'completed' ? ' (concluída)' : ''}`
-        }, s.id))
-      })
-    ]
-  })
-  const actions = jsxs('div', { style: { display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }, children: [
-    picker,
-    session.status === 'planned' && jsx(Navigate, { primary: true, icon: 'play', onClick: () => changeStatus('start'), children: busy ? 'Iniciando…' : 'Iniciar aula' }),
-    session.status === 'in_progress' && jsx(Navigate, { primary: true, icon: 'check', onClick: () => changeStatus('complete'), children: busy ? 'Concluindo…' : 'Concluir aula' }),
-    session.portal_path && jsx(Navigate, {
-      icon: 'browser', onClick: () => setPortalOpen(true), children: 'Ver conteúdo completo'
-    }),
-    jsx(Navigate, { path: `${BASE}/lab`, icon: 'beaker', children: 'Abrir laboratório' })
-  ] })
-  return jsxs('div', { children: [
-    jsx(Page, {
-      label: session.teacher, title: session.actual_topic || session.planned_topic, subtitle: session.objective, actions,
-      children: jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 286px', gap: 16 }, children: [
-        jsx('section', { style: { display: 'grid', gap: 14 }, children: (session.blocks || []).map(([type, body], index) => {
-          const isMedia = ['Diagrama', 'Vídeo', 'Simulação'].includes(type)
-          const isCode = ['Código', 'Equação'].includes(type)
-          if (isMedia) {
-            const clickable = Boolean(session.portal_path)
-            return jsx(Card, {
-              title: type, icon: blockIcon[type] || 'symbol-misc',
-              children: jsxs('button', {
-                type: 'button', disabled: !clickable, onClick: () => clickable && setPortalOpen(true),
-                style: {
-                  width: '100%', textAlign: 'left', border: 'none', borderRadius: 9, padding: 14,
-                  fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: 1.6,
-                  background: 'color-mix(in srgb, var(--foreground) 4%, transparent)',
-                  color: clickable ? 'var(--accent-2, var(--accent))' : 'var(--muted-foreground)',
-                  cursor: clickable ? 'pointer' : 'default', display: 'flex',
-                  alignItems: 'center', justifyContent: 'space-between', gap: 10
-                },
-                children: [body, clickable && jsx('span', { style: { fontSize: 12, opacity: .85, whiteSpace: 'nowrap' }, children: 'Abrir →' })]
-              })
-            }, `${type}-${index}`)
-          }
-          return jsx(Card, {
-            title: type, icon: blockIcon[type] || 'symbol-misc',
-            children: isCode ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body })
-          }, `${type}-${index}`)
-        }) }),
-        jsx('aside', { children: jsxs('div', { style: { position: 'sticky', top: 16, display: 'grid', gap: 14 }, children: [
-          jsx(Card, { title: 'Estado da sessão', icon: 'pulse', children: jsxs('div', { children: [jsx(Badge, { state: session.status, children: session.status }), jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: `${session.planned_duration || '—'} minutos planejados` })] }) }),
-          jsx(Card, { title: 'Próximo passo', icon: 'arrow-swap', children: jsx('p', { style: { margin: 0, lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: session.next_step || 'Aguardando conclusão da aula' }) }),
-          jsx(Navigate, { path: `${BASE}/resources`, icon: 'references', children: 'Recursos da sessão' })
-        ] }) })
-      ] })
-    }),
-    portalOpen && jsx(PortalDialog, {
-      open: portalOpen,
-      onOpenChange: setPortalOpen,
-      title: session.actual_topic || session.planned_topic,
-      kind: 'session',
-      ids: { sessionId },
-      useApi,
-    })
-  ] })
-}
-function TerminalChrome({ children }) {
-  return jsxs('div', {
-    style: { borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)', margin: '14px 0' }, children: [
-      jsxs('div', {
-        style: { display: 'flex', gap: 6, padding: '9px 12px', background: 'color-mix(in srgb, var(--foreground) 6%, transparent)', borderBottom: '1px solid var(--border)' }, children: [
-          jsx('span', { style: { width: 10, height: 10, borderRadius: 999, background: '#e5484d' } }),
-          jsx('span', { style: { width: 10, height: 10, borderRadius: 999, background: '#c2760c' } }),
-          jsx('span', { style: { width: 10, height: 10, borderRadius: 999, background: '#1a9c5c' } })
-        ]
-      }),
-      jsx('pre', { style: { margin: 0, padding: 14, overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 12.5, lineHeight: 1.6, background: 'color-mix(in srgb, var(--foreground) 3%, transparent)' }, children })
-    ]
-  })
-}
-
-// Inlined from pages/metrics.js
-
-function MetricsPage({ useApi, Page, Loading, ErrorState, Empty, Card, Badge, css }) {
-  const { data, isLoading, error } = useApi('/metrics', ['metrics'])
-  const totals = data?.totals || {}
-  const byTrack = data?.by_track || []
-  const weekdayCalendar = data?.weekday_calendar || []
-  const courses = data?.courses || []
-  const maxWeekday = Math.max(1, ...weekdayCalendar.map((d) => Math.max(d.planned, d.actual)))
-  const exercisePercent = totals.exercises_total ? Math.round((totals.exercises_done / totals.exercises_total) * 100) : 0
-  const sessionPercent = totals.sessions_total ? Math.round((totals.sessions_completed / totals.sessions_total) * 100) : 0
-  return jsx(Page, {
-    label: 'Visão geral', title: 'Métricas', subtitle: 'Minutos reais de estudo, exercícios concluídos e o calendário programático por matéria/curso.',
-    children: isLoading ? jsx(Loading, { label: 'métricas' }) : error ? jsx(ErrorState, { label: 'métricas', error }) : jsxs('div', { style: { display: 'grid', gap: 16 }, children: [
-      jsxs('section', { style: css.grid, children: [
-        jsx(Card, { title: 'Minutos reais de estudo', icon: 'clock', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: totals.minutes_real || 0 }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: `de ${totals.minutes_planned || 0} min planejados` })] }) }),
-        jsx(Card, { title: 'Sessões concluídas', icon: 'check', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: `${totals.sessions_completed || 0}/${totals.sessions_total || 0}` }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: `${sessionPercent}% do total` })] }) }),
-        jsx(Card, { title: 'Exercícios feitos', icon: 'checklist', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: `${totals.exercises_done || 0}/${totals.exercises_total || 0}` }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: `${exercisePercent}% concluído` })] }) })
-      ] }),
-      jsx(Card, { title: 'Calendário programático', icon: 'calendar', children: !weekdayCalendar.length ? jsx(Empty, { label: 'calendário' }) : jsx('div', { style: { display: 'grid', gap: 10 }, children: weekdayCalendar.map((d) => jsxs('div', { style: { display: 'grid', gridTemplateColumns: '90px minmax(0,1fr) 70px', gap: 10, alignItems: 'center' }, children: [
-        jsx('span', { style: { fontSize: 13, color: 'var(--muted-foreground)' }, children: d.weekday }),
-        jsxs('div', { style: { position: 'relative', height: 10, borderRadius: 6, background: 'color-mix(in srgb, var(--foreground) 6%, transparent)', overflow: 'hidden' }, children: [
-          jsx('div', { style: { position: 'absolute', inset: 0, width: `${(d.planned / maxWeekday) * 100}%`, background: 'color-mix(in srgb, var(--accent) 30%, transparent)' } }),
-          jsx('div', { style: { position: 'absolute', inset: 0, width: `${(d.actual / maxWeekday) * 100}%`, background: 'var(--accent)' } })
-        ] }),
-        jsx('span', { style: { fontSize: 12, color: 'var(--muted-foreground)', textAlign: 'right' }, children: `${d.actual}/${d.planned}` })
-      ] }, d.weekday)) }) }),
-      jsx(Card, { title: 'Progresso por matéria/curso', icon: 'graph', children: !byTrack.length ? jsx(Empty, { label: 'trilhas' }) : jsx('div', { style: { display: 'grid', gap: 12 }, children: byTrack.map((t) => jsxs('div', { style: { borderBottom: '1px solid var(--border)', paddingBottom: 12 }, children: [
-        jsxs('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }, children: [
-          jsx('strong', { children: t.title }),
-          jsx(Badge, { state: t.stage, children: t.stage || '—' })
-        ] }),
-        jsxs('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12.5, color: 'var(--muted-foreground)' }, children: [
-          jsxs('span', { children: ['◷ ', `${t.minutes_real} min reais`] }),
-          jsxs('span', { children: ['◉ ', `${t.sessions_completed}/${t.sessions_total} sessões`] }),
-          jsxs('span', { children: ['✓ ', `${t.exercises_done}/${t.exercises_total} exercícios`] })
-        ] })
-      ] }, t.track_id)) }) }),
-      jsx(Card, { title: 'Conclusão dos cursos', icon: 'mortar-board', children: !courses.length ? jsx(Empty, { label: 'cursos' }) : jsx('div', { style: { display: 'grid', gap: 12 }, children: courses.map((c) => jsxs('div', { children: [
-        jsxs('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 }, children: [jsx('strong', { style: { fontSize: 13.5 }, children: c.title }), jsx('span', { style: { fontSize: 12.5, color: 'var(--muted-foreground)' }, children: `${c.lessons_ready}/${c.lessons_total} aulas · ${c.percent}%` })] }),
-        jsx('div', { style: { height: 8, borderRadius: 5, background: 'color-mix(in srgb, var(--foreground) 6%, transparent)', overflow: 'hidden' }, children: jsx('div', { style: { height: '100%', width: `${c.percent}%`, background: 'var(--accent)' } }) })
-      ] }, c.course_id)) }) })
-    ] })
-  })
+  const picker = sessions.length > 1 && jsx('label', { style: { display: 'grid', gap: 4, color: 'var(--muted-foreground)', fontSize: 12, minWidth: 260 }, children: ['Aula selecionada', jsx('select', { className: 'gnos-select', value: sessionId || '', style: { ...css.ghost, width: '100%' }, onChange: (event) => selectSession(event.target.value), children: sessions.map((s) => jsx('option', { value: s.id, children: `${s.track_title ? s.track_title + ' · ' : ''}${s.sequence_label ? s.sequence_label + ' · ' : ''}${s.actual_topic || s.planned_topic}${s.status === 'completed' ? ' (concluída)' : ''}` }, s.id)) })] })
+  const actions = jsxs('div', { style: { display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }, children: [picker, session.status === 'planned' && jsx(Navigate, { primary: true, icon: 'play', disabled: busy, onClick: () => changeStatus('start'), children: busy ? 'Iniciando…' : 'Iniciar aula' }), session.status === 'in_progress' && jsx(Navigate, { primary: true, icon: 'check', disabled: busy, onClick: () => changeStatus('complete'), children: busy ? 'Concluindo…' : 'Concluir aula' }), session.portal_path && jsx(Navigate, { icon: 'browser', onClick: () => setPortalOpen(true), children: 'Ver conteúdo completo' }), jsx(Navigate, { path: `${BASE}/lab?session=${encodeURIComponent(sessionId)}`, icon: 'beaker', onClick: () => { globalThis.sessionStorage?.setItem('gnos.selected-session', sessionId); host.navigate(`${BASE}/lab?session=${encodeURIComponent(sessionId)}`) }, children: 'Abrir laboratório' })] })
+  return jsxs('div', { children: [jsx(Page, { label: session.teacher, title: session.actual_topic || session.planned_topic, subtitle: session.objective, actions, children: jsxs('div', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 286px', gap: 16 }, children: [jsx('section', { style: { display: 'grid', gap: 14 }, children: (session.blocks || []).map(([type, body], index) => { const isMedia = ['Diagrama', 'Vídeo', 'Simulação'].includes(type); const isCode = ['Código', 'Equação'].includes(type); if (isMedia) { const clickable = Boolean(session.portal_path); return jsx(Card, { title: type, icon: blockIcon[type] || 'symbol-misc', children: jsxs('button', { type: 'button', disabled: !clickable, onClick: () => clickable && setPortalOpen(true), style: { width: '100%', textAlign: 'left', border: 'none', borderRadius: 9, padding: 14, fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: 1.6, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', color: clickable ? 'var(--accent-2, var(--accent))' : 'var(--muted-foreground)', cursor: clickable ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, children: [body, clickable && jsx('span', { style: { fontSize: 12, opacity: .85, whiteSpace: 'nowrap' }, children: 'Abrir →' })] }) }, `${type}-${index}`) }; return jsx(Card, { title: type, icon: blockIcon[type] || 'symbol-misc', children: isCode ? jsx('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, background: 'color-mix(in srgb, var(--foreground) 4%, transparent)', padding: 14, borderRadius: 9, lineHeight: 1.6 }, children: body }) : jsx(RichText, { text: body }) }, `${type}-${index}`) }) }), jsx('aside', { children: jsxs('div', { style: { position: 'sticky', top: 16, display: 'grid', gap: 14 }, children: [jsx(Card, { title: 'Estado da sessão', icon: 'pulse', children: jsxs('div', { children: [jsx(Badge, { state: session.status, children: session.status }), jsx('p', { style: { ...css.subtitle, marginBottom: 0 }, children: `${session.planned_duration || '—'} minutos planejados` })] }) }), jsx(Card, { title: 'Próximo passo', icon: 'arrow-swap', children: jsx('p', { style: { margin: 0, lineHeight: 1.55, color: 'var(--muted-foreground)' }, children: session.next_step || 'Aguardando conclusão da aula' }) }), jsx(Navigate, { path: `${BASE}/resources`, icon: 'references', children: 'Recursos da sessão' })] }) })] }) }), portalOpen && jsx(PortalDialog, { open: portalOpen, onOpenChange: setPortalOpen, title: session.actual_topic || session.planned_topic, kind: 'session', ids: { sessionId }, useApi, postApi, host })] })
 }
 
 // Inlined from pages/progress.js
@@ -486,58 +372,52 @@ function MonthCalendar({ sessions }) {
 
 // Inlined from pages/projects.js
 
-function ProjectsPage({ useApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css }) {
-  const { data, isLoading, error } = useApi('/projects', ['projects'])
+const statusLabels = { planned: 'Planejado', in_progress: 'Em andamento', blocked: 'Bloqueado', completed: 'Concluído', archived: 'Arquivado' }
+
+function ProjectsPage({ useApi, postApi, mutateApi, host, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css }) {
+  const [refresh, setRefresh] = useState(0)
+  const { data, isLoading, error } = useApi('/projects', ['projects', refresh])
   const items = data?.projects || []
-  return jsx(Page, { label: 'Integração de competências', title: 'Projetos', subtitle: 'Projetos conectam capacidades que a prática isolada não demonstra por si só.', children: isLoading ? jsx(Loading, { label: 'projetos' }) : error ? jsx(ErrorState, { label: 'projetos', error }) : !items.length ? jsx(Empty, { label: 'projetos' }) : jsx('div', { style: css.grid, children: items.map((p) => jsx(Card, { title: p.title, icon: 'project', accent: true, children: jsxs('div', { children: [jsx('p', { style: { fontSize: 13.5, lineHeight: 1.5, color: 'var(--muted-foreground)' }, children: p.competencies }), jsx(Badge, { state: p.status, children: p.status }), jsxs('div', { className: 'gnos-actions', style: { display: 'flex', gap: 8, marginTop: 18 }, children: [jsx(Navigate, { path: `${BASE}/assessments`, primary: true, icon: 'checklist', children: 'Ver avaliações' }), jsx(Navigate, { path: `${BASE}/progress`, icon: 'graph', children: 'Ver competências' })] })] }) }, p.id)) }) })
+  const [selectedId, setSelectedId] = useState(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [draft, setDraft] = useState({ title: '', objective: '', competencies: '', next_step: '' })
+  const detail = useApi(selectedId ? `/projects/${selectedId}` : null, ['project', selectedId, refresh], { enabled: Boolean(selectedId) })
+  const selectProject = (id) => setSelectedId(id)
+  const createProject = async () => {
+    if (!draft.title.trim()) { host.toast?.('Informe um título para o projeto.', 'error'); return }
+    setBusy(true)
+    try {
+      const result = await postApi('/projects', { ...draft, competencies: draft.competencies.split(',').map((item) => item.trim()).filter(Boolean) })
+      setDraft({ title: '', objective: '', competencies: '', next_step: '' }); setCreateOpen(false); selectProject(result.project.id); setRefresh((value) => value + 1); host.toast?.('Projeto criado.', 'success')
+    } catch (e) { host.toast?.(String(e?.message || e), 'error') } finally { setBusy(false) }
+  }
+  const createForm = createOpen && jsx(Card, { title: 'Novo projeto', icon: 'add', accent: true, children: jsxs('div', { style: { display: 'grid', gap: 10 }, children: [
+    jsx('input', { className: 'gnos-select', value: draft.title, placeholder: 'Título do projeto', 'aria-label': 'Título do projeto', onChange: (e) => setDraft({ ...draft, title: e.target.value }) }),
+    jsx('textarea', { className: 'gnos-select', rows: 3, value: draft.objective, placeholder: 'Objetivo e resultado verificável', 'aria-label': 'Objetivo do projeto', onChange: (e) => setDraft({ ...draft, objective: e.target.value }) }),
+    jsx('input', { className: 'gnos-select', value: draft.competencies, placeholder: 'Competências (separadas por vírgula)', 'aria-label': 'Competências relacionadas', onChange: (e) => setDraft({ ...draft, competencies: e.target.value }) }),
+    jsx('input', { className: 'gnos-select', value: draft.next_step, placeholder: 'Próximo passo concreto', 'aria-label': 'Próximo passo', onChange: (e) => setDraft({ ...draft, next_step: e.target.value }) }),
+    jsxs('div', { style: { display: 'flex', gap: 8 }, children: [jsx(Navigate, { primary: true, disabled: busy, onClick: createProject, children: busy ? 'Criando…' : 'Criar projeto' }), jsx(Navigate, { disabled: busy, onClick: () => setCreateOpen(false), children: 'Cancelar' })] })
+  ] }) })
+  return jsx(Page, { label: 'Integração de competências', title: 'Projetos', subtitle: 'Planeje entregas, registre o trabalho e vincule evidências às capacidades demonstradas.', actions: jsx(Navigate, { primary: true, icon: 'add', onClick: () => setCreateOpen(!createOpen), children: createOpen ? 'Fechar formulário' : 'Novo projeto' }), children: isLoading ? jsx(Loading, { label: 'projetos' }) : error ? jsx(ErrorState, { label: 'projetos', error }) : jsxs('div', { style: { display: 'grid', gap: 16 }, children: [createForm, !items.length ? jsx(Empty, { label: 'projetos — crie o primeiro projeto para conectar suas competências' }) : jsx('div', { style: css.grid, children: items.map((project) => jsx('button', { type: 'button', onClick: () => selectProject(project.id), style: { border: 0, padding: 0, textAlign: 'left', background: 'transparent', color: 'inherit', cursor: 'pointer' }, children: jsx(Card, { title: project.title, icon: 'project', accent: selectedId === project.id, children: jsxs('div', { children: [jsx('p', { style: { fontSize: 13.5, lineHeight: 1.5, color: 'var(--muted-foreground)' }, children: project.objective || 'Defina o objetivo verificável deste projeto.' }), jsx(Badge, { state: project.status, children: statusLabels[project.status] || project.status }), jsx('p', { style: { margin: '12px 0 0', fontSize: 13 }, children: `${project.milestones_completed}/${project.milestones_total} marcos · ${project.progress_percent}%` }), project.next_step && jsx('p', { style: { margin: '8px 0 0', color: 'var(--muted-foreground)', fontSize: 12.5 }, children: `Próximo: ${project.next_step}` })] }) }) }, project.id)) }), selectedId && (detail.isLoading ? jsx(Loading, { label: 'detalhe do projeto' }) : detail.error ? jsx(ErrorState, { label: 'detalhe do projeto', error: detail.error }) : jsx(ProjectDetail, { data: detail.data, postApi, mutateApi, host, css, Card, Badge, Navigate, busy, setBusy, onChanged: () => setRefresh((value) => value + 1) }))] }) })
 }
 
-// Inlined from pages/resources.js
-
-function ResourcesPage({ useApi, mutateApi, host, Page, Loading, ErrorState, Empty, Card, ListRow, Badge, css, artifactIcon, Pagination }) {
-  const [folderId, setFolderId] = useState(null)
-  const [page, setPage] = useState(1)
-  const [query, setQuery] = useState('')
-  const [kind, setKind] = useState('all')
-  const queryFolder = folderId ? `&folder_id=${encodeURIComponent(folderId)}` : ''
-  const querySearch = query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''
-  const queryKind = kind !== 'all' ? `&kind=${kind}` : ''
-  const { data, isLoading, error } = useApi(`/library?page=${page}&page_size=12${queryFolder}${querySearch}${queryKind}`, ['library', folderId, page, query, kind])
-  const { data: todayData } = useApi('/today', ['today'])
-  const folders = data?.folders || []
-  const items = data?.items || []
-  const chooseFolder = (id) => { setFolderId(id); setPage(1) }
-  const toggleFavorite = async (item) => {
-    try { await mutateApi(`/library/favorites/${encodeURIComponent(item.id)}`, item.favorite ? 'DELETE' : 'POST'); host.toast?.(item.favorite ? 'Removido dos favoritos.' : 'Adicionado aos favoritos.', 'success') }
-    catch (e) { host.toast?.(String(e?.message || e), 'error') }
-  }
-  const useResource = async (item) => {
-    try { await mutateApi(`/sessions/${todayData.session_id}/resources/${encodeURIComponent(item.id)}`, 'POST'); host.toast?.('Uso registrado na sessão.', 'success') }
-    catch (e) { host.toast?.(String(e?.message || e), 'error') }
-  }
-  return jsx(Page, {
-    label: 'Biblioteca organizada', title: 'Recursos e fontes', subtitle: 'Recursos por matéria, com busca e paginação.',
-    children: isLoading ? jsx(Loading, { label: 'biblioteca' }) : error ? jsx(ErrorState, { label: 'biblioteca', error }) : jsxs('div', { style: { display: 'grid', gap: 16 }, children: [
-      jsx(Card, { title: 'Pastas e filtros', icon: 'folder', children: jsxs('div', { style: { display: 'grid', gap: 10 }, children: [
-        jsxs('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 180px', gap: 10 }, children: [
-          jsx('input', { className: 'gnos-select', value: query, placeholder: 'Buscar recursos...', onChange: (e) => { setQuery(e.target.value); setPage(1) } }),
-          jsx('select', { className: 'gnos-select', value: kind, onChange: (e) => { setKind(e.target.value); setPage(1) }, children: [jsx('option', { value: 'all', children: 'Todos os tipos' }), jsx('option', { value: 'source', children: 'Fontes' }), jsx('option', { value: 'resource', children: 'Recursos' })] })
-        ] }),
-        jsx('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' }, children: [
-          jsx('button', { type: 'button', className: 'gnos-action', style: folderId ? css.ghost : css.button, onClick: () => chooseFolder(null), children: 'Todas' }),
-          ...folders.map((folder) => jsx('button', { type: 'button', className: 'gnos-action', style: folder.id === folderId ? css.button : css.ghost, onClick: () => chooseFolder(folder.id), children: `${folder.title} (${folder.count})` }, folder.id))
-        ] })
-      ] }) }),
-      jsx(Card, { title: 'Conteúdo', icon: 'references', children: !items.length ? jsx(Empty, { label: 'itens nesta pasta' }) : jsxs('div', { children: [
-        ...items.map((item) => jsx(ListRow, { icon: item.kind === 'source' ? 'link-external' : (artifactIcon[item.type] || 'file-text'), title: item.title, detail: item.detail || item.provenance || '', action: jsxs('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' }, children: [
-          jsx('button', { type: 'button', className: 'gnos-action', style: css.ghost, onClick: () => toggleFavorite(item), children: item.favorite ? '★' : '☆' }),
-          todayData?.session_id && item.kind === 'resource' ? jsx('button', { type: 'button', className: 'gnos-action', style: css.ghost, onClick: () => useResource(item), children: 'Usar' }) : null,
-          item.url ? jsx('a', { href: item.url, target: '_blank', rel: 'noreferrer', style: { ...css.ghost, textDecoration: 'none' }, children: 'Abrir' }) : jsx(Badge, { state: 'planned', children: 'Sem link' })
-        ] }) }, item.id)),
-        jsx(Pagination, { total: data?.total, page: data?.page, hasMore: data?.has_more, onPrevious: () => setPage((n) => Math.max(1, n - 1)), onNext: () => setPage((n) => n + 1) })
-      ] }) })
-    ] })
-  })
+function ProjectDetail({ data, postApi, mutateApi, host, css, Card, Badge, Navigate, busy, setBusy, onChanged }) {
+  const project = data?.project
+  const [activity, setActivity] = useState('')
+  const [milestone, setMilestone] = useState('')
+  const [evidence, setEvidence] = useState({ label: '', url: '', detail: '' })
+  const [nextStep, setNextStep] = useState(project?.next_step || '')
+  if (!project) return null
+  const run = async (work, success) => { setBusy(true); try { await work(); onChanged(); host.toast?.(success, 'success') } catch (e) { host.toast?.(String(e?.message || e), 'error') } finally { setBusy(false) } }
+  return jsx(Card, { title: `Projeto · ${project.title}`, icon: 'project', accent: true, children: jsxs('div', { style: { display: 'grid', gap: 14 }, children: [
+    jsx('p', { style: { margin: 0, lineHeight: 1.55 }, children: project.objective || 'Sem objetivo definido.' }),
+    jsx('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' }, children: Object.entries(statusLabels).filter(([status]) => status !== 'archived').map(([status, label]) => jsx(Navigate, { primary: project.status === status, disabled: busy || project.status === status || (status === 'completed' && (!(data.milestones || []).length || (data.milestones || []).some((item) => item.status !== 'completed'))), onClick: () => run(() => mutateApi(`/projects/${project.id}`, 'PATCH', { status, next_step: nextStep }), `Projeto marcado como ${label.toLowerCase()}.`), children: label }, status)) }),
+    jsxs('label', { style: { display: 'grid', gap: 5, fontSize: 12, color: 'var(--muted-foreground)' }, children: ['Próximo passo', jsx('input', { className: 'gnos-select', value: nextStep, onChange: (e) => setNextStep(e.target.value), style: { ...css.ghost, width: '100%' } })] }),
+    jsx(Navigate, { disabled: busy, onClick: () => run(() => mutateApi(`/projects/${project.id}`, 'PATCH', { next_step: nextStep }), 'Próximo passo atualizado.'), children: 'Salvar próximo passo' }),
+    jsx(Card, { title: 'Marcos', icon: 'checklist', children: jsxs('div', { style: { display: 'grid', gap: 8 }, children: [(data.milestones || []).map((item) => jsxs('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, children: [jsxs('span', { children: [item.title, ' ', jsx(Badge, { state: item.status, children: item.status })] }), item.status !== 'completed' && jsx(Navigate, { disabled: busy, onClick: () => run(() => mutateApi(`/projects/${project.id}/milestones/${item.id}`, 'PATCH', { status: 'completed' }), 'Marco concluído.'), children: 'Concluir marco' })] }, item.id)), jsxs('div', { style: { display: 'flex', gap: 8 }, children: [jsx('input', { className: 'gnos-select', value: milestone, placeholder: 'Novo marco', 'aria-label': 'Novo marco', onChange: (e) => setMilestone(e.target.value), style: { flex: 1 } }), jsx(Navigate, { disabled: busy || !milestone.trim(), onClick: () => run(async () => { await postApi(`/projects/${project.id}/milestones`, { title: milestone.trim() }); setMilestone('') }, 'Marco adicionado.'), children: 'Adicionar' })] })] }) }),
+    jsx(Card, { title: 'Atualizações e evidências', icon: 'history', children: jsxs('div', { style: { display: 'grid', gap: 10 }, children: [jsx('textarea', { className: 'gnos-select', rows: 2, value: activity, placeholder: 'Registre o avanço realizado', 'aria-label': 'Atualização do projeto', onChange: (e) => setActivity(e.target.value) }), jsx(Navigate, { disabled: busy || !activity.trim(), onClick: () => run(async () => { await postApi(`/projects/${project.id}/activities`, { text: activity.trim() }); setActivity('') }, 'Atualização registrada.'), children: 'Registrar atualização' }), jsx('input', { className: 'gnos-select', value: evidence.label, placeholder: 'Nome da evidência', 'aria-label': 'Nome da evidência', onChange: (e) => setEvidence({ ...evidence, label: e.target.value }) }), jsx('input', { className: 'gnos-select', value: evidence.url, placeholder: 'URL da evidência (opcional)', 'aria-label': 'URL da evidência', onChange: (e) => setEvidence({ ...evidence, url: e.target.value }) }), jsx(Navigate, { disabled: busy || !evidence.label.trim(), onClick: () => run(async () => { await postApi(`/projects/${project.id}/evidence`, evidence); setEvidence({ label: '', url: '', detail: '' }) }, 'Evidência adicionada.'), children: 'Adicionar evidência' }), ...(data.activities || []).map((item) => jsx('p', { style: { margin: 0, fontSize: 13, color: 'var(--muted-foreground)' }, children: `Atualização · ${item.text}` }, item.id)), ...(data.evidence || []).map((item) => jsx('p', { style: { margin: 0, fontSize: 13 }, children: item.url ? jsx('a', { href: item.url, target: '_blank', rel: 'noreferrer', children: `Evidência · ${item.label}` }) : `Evidência · ${item.label}` }, item.id))] }) })
+  ] }) })
 }
 
 // Inlined from pages/timeline.js
@@ -560,7 +440,8 @@ function TimelinePage({ useApi, mutateApi, postApi, host, BASE, Page, Loading, E
     setBusy(true)
     try {
       if (session.status === 'planned') await postApi(`/sessions/${session.id}/start`)
-      host.navigate(`${BASE}/lesson`)
+      globalThis.sessionStorage?.setItem('gnos.selected-session', session.id)
+      host.navigate(`${BASE}/lesson?session=${encodeURIComponent(session.id)}`)
     } catch (actionError) { host.toast?.(String(actionError?.message || actionError), 'error') } finally { setBusy(false) }
   }
   const completeSession = async (session) => {
@@ -570,7 +451,7 @@ function TimelinePage({ useApi, mutateApi, postApi, host, BASE, Page, Loading, E
   const plannedCount = sessions.filter((session) => session.status === 'planned').length
   const actualCount = sessions.length - plannedCount
   return jsx(Page, { label: 'Planejado e real', title: 'Cronograma', actions: jsxs('div', { style: { display: 'flex', gap: 6 }, children: [jsx(Navigate, { primary: mode === 'planned', onClick: () => setMode('planned'), children: `Planejado (${plannedCount})` }), jsx(Navigate, { primary: mode === 'actual', onClick: () => setMode('actual'), children: `Real (${actualCount})` })] }), subtitle: 'Reagende aulas futuras, acompanhe o que foi executado e conclua sessões sem apagar o histórico.', children: isLoading ? jsx(Loading, { label: 'cronograma' }) : error ? jsx(ErrorState, { label: 'cronograma', error }) : jsxs('div', { style: { display: 'grid', gap: 16 }, children: [
-    jsx(Card, { title: mode === 'planned' ? 'Próximas sessões' : 'Sessões executadas', icon: mode === 'planned' ? 'calendar' : 'history', children: !rows.length ? jsx(Empty, { label: mode === 'planned' ? 'sessões planejadas' : 'sessões executadas' }) : jsx('div', { style: { display: 'grid', gap: 10 }, children: rows.map((session) => editingId === session.id ? jsx(Card, { title: `Editar · ${session.planned_topic || 'Sessão'}`, children: jsxs('div', { style: { display: 'grid', gap: 10 }, children: [jsx('input', { type: 'date', className: 'gnos-select', value: draft.planned_date, onChange: (event) => setDraft({ ...draft, planned_date: event.target.value }) }), jsx('input', { className: 'gnos-select', value: draft.planned_topic, placeholder: 'Tópico', onChange: (event) => setDraft({ ...draft, planned_topic: event.target.value }) }), jsx('input', { type: 'number', min: 1, max: 1440, className: 'gnos-select', value: draft.planned_duration, onChange: (event) => setDraft({ ...draft, planned_duration: event.target.value }) }), jsxs('div', { style: { display: 'flex', gap: 8 }, children: [jsx(Navigate, { primary: true, onClick: saveSchedule, children: busy ? 'Salvando…' : 'Salvar agenda' }), jsx(Navigate, { onClick: () => setEditingId(null), children: 'Cancelar' })] })] }) }, session.id) : jsx(ListRow, { icon: kindIcon[session.kind] || 'calendar', title: [session.planned_date || session.actual_date, session.sequence_label, session.actual_topic || session.planned_topic || 'Sessão'].filter(Boolean).join(' · '), detail: `${session.track_title || 'Trilha'} · ${session.planned_duration || session.actual_duration || '—'} min · ${session.status}`, action: mode === 'planned' ? jsxs('div', { style: { display: 'flex', gap: 6 }, children: [jsx(Navigate, { icon: 'edit', onClick: () => beginEdit(session), children: 'Editar' }), jsx(Navigate, { primary: true, icon: 'play', onClick: () => openSession(session), children: busy ? 'Abrindo…' : 'Abrir aula' })] }) : jsx(Badge, { state: 'completed', children: 'concluída' }) }, session.id)) }) }),
+    jsx(Card, { title: mode === 'planned' ? 'Próximas sessões' : 'Sessões executadas', icon: mode === 'planned' ? 'calendar' : 'history', children: !rows.length ? jsx(Empty, { label: mode === 'planned' ? 'sessões planejadas' : 'sessões executadas' }) : jsx('div', { style: { display: 'grid', gap: 10 }, children: rows.map((session) => editingId === session.id ? jsx(Card, { title: `Editar · ${session.planned_topic || 'Sessão'}`, children: jsxs('div', { style: { display: 'grid', gap: 10 }, children: [jsx('input', { type: 'date', className: 'gnos-select', value: draft.planned_date, onChange: (event) => setDraft({ ...draft, planned_date: event.target.value }) }), jsx('input', { className: 'gnos-select', value: draft.planned_topic, placeholder: 'Tópico', onChange: (event) => setDraft({ ...draft, planned_topic: event.target.value }) }), jsx('input', { type: 'number', min: 1, max: 1440, className: 'gnos-select', value: draft.planned_duration, onChange: (event) => setDraft({ ...draft, planned_duration: event.target.value }) }), jsxs('div', { style: { display: 'flex', gap: 8 }, children: [jsx(Navigate, { primary: true, disabled: busy, onClick: saveSchedule, children: busy ? 'Salvando…' : 'Salvar agenda' }), jsx(Navigate, { onClick: () => setEditingId(null), children: 'Cancelar' })] })] }) }, session.id) : jsx(ListRow, { icon: kindIcon[session.kind] || 'calendar', title: [session.planned_date || session.actual_date, session.sequence_label, session.actual_topic || session.planned_topic || 'Sessão'].filter(Boolean).join(' · '), detail: `${session.track_title || 'Trilha'} · ${session.planned_duration || session.actual_duration || '—'} min · ${session.status}`, action: mode === 'planned' ? jsxs('div', { style: { display: 'flex', gap: 6 }, children: [jsx(Navigate, { icon: 'edit', disabled: busy, onClick: () => beginEdit(session), children: 'Editar' }), jsx(Navigate, { primary: true, icon: 'play', disabled: busy, onClick: () => openSession(session), children: busy ? 'Abrindo…' : 'Abrir aula' })] }) : jsx(Badge, { state: 'completed', children: 'concluída' }) }, session.id)) }) }),
     mode === 'actual' && timelineData?.actual?.length ? jsx(Card, { title: 'Histórico de adaptações', icon: 'history', children: timelineData.actual.map((row) => jsx(ListRow, { icon: kindIcon[row.kind] || 'history', title: `${row.entry_date} · ${row.text}`, detail: row.adaptive_reason || row.kind, action: jsx(Badge, { state: row.kind === 'repair' ? 'repair-needed' : 'completed', children: row.kind }) }, row.id)) }) : null
   ] }) })
 }
@@ -625,7 +506,7 @@ function TodayPage({ useApi, postApi, host, BASE, Page, Loading, ErrorState, Emp
       style: { display: 'grid', gap: 16 }, children: [
         jsxs('section', { className: 'gnos-two-col', style: { display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) minmax(260px,.8fr)', gap: 16 }, children: [
           jsx(Card, { accent: true, children: jsxs('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 28, alignItems: 'center', minHeight: 210 }, children: [
-            jsxs('div', { children: [jsx(Badge, { state: data.status, children: data.track || data.status }), jsx('h2', { style: { margin: '18px 0 10px', fontSize: 34, fontWeight: 780, letterSpacing: '-.045em' }, children: data.session }), jsx('p', { style: { ...css.subtitle, marginBottom: 0, color: 'var(--foreground)', opacity: .82 }, children: data.objective }), jsxs('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', color: 'var(--muted-foreground)', fontSize: 14, marginTop: 18 }, children: [jsxs('span', { children: ['◷ ', data.status === 'in_progress' ? `${formatElapsed(elapsedSeconds)} em foco` : `${data.duration || '—'} min`] }), jsxs('span', { children: ['◉ ', data.track || 'Trilha atual'] }), jsxs('span', { children: ['⚙ ', `${labsData?.labs?.length || 0} laboratório(s)`] })] }), jsxs('div', { className: 'gnos-actions', style: { display: 'flex', gap: 10, marginTop: 22 }, children: [jsx(Navigate, { path: `${BASE}/lesson`, primary: true, icon: 'arrow-right', children: 'Continuar aula' }), jsx(Navigate, { path: `${BASE}/timeline`, icon: 'calendar', children: 'Ver cronograma' })] })] }),
+            jsxs('div', { children: [jsx(Badge, { state: data.status, children: data.track || data.status }), jsx('h2', { style: { margin: '18px 0 10px', fontSize: 34, fontWeight: 780, letterSpacing: '-.045em' }, children: data.session }), jsx('p', { style: { ...css.subtitle, marginBottom: 0, color: 'var(--foreground)', opacity: .82 }, children: data.objective }), jsxs('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', color: 'var(--muted-foreground)', fontSize: 14, marginTop: 18 }, children: [jsxs('span', { children: ['◷ ', data.status === 'in_progress' ? `${formatElapsed(elapsedSeconds)} em foco` : `${data.duration || '—'} min`] }), jsxs('span', { children: ['◉ ', data.track || 'Trilha atual'] }), jsxs('span', { children: ['⚙ ', `${labsData?.labs?.length || 0} laboratório(s)`] })] }), jsxs('div', { className: 'gnos-actions', style: { display: 'flex', gap: 10, marginTop: 22 }, children: [jsx(Navigate, { primary: true, icon: 'arrow-right', onClick: () => { const id = data.session_id; globalThis.sessionStorage?.setItem('gnos.selected-session', id); host.navigate(`${BASE}/lesson?session=${encodeURIComponent(id)}`) }, children: 'Continuar aula' }), jsx(Navigate, { path: `${BASE}/timeline`, icon: 'calendar', children: 'Ver cronograma' })] })] }),
             jsx('div', { style: { width: 112, height: 112, borderRadius: '50%', padding: 8, display: 'grid', placeItems: 'center', background: `conic-gradient(var(--accent) ${percent}%, #282d38 0)`, boxShadow: '0 0 34px rgba(124,92,255,.16)' }, children: jsxs('div', { style: { width: '100%', height: '100%', borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'var(--card)' }, children: [jsx('strong', { style: { fontSize: 25, alignSelf: 'end', marginBottom: 2 }, children: `${percent}%` }), jsx('small', { style: { color: 'var(--muted-foreground)', alignSelf: 'start', marginTop: 2 }, children: 'trilha' })] }) })
           ] }) }),
           jsx(Card, { title: 'Foco de hoje', icon: 'target', children: jsxs('div', { children: [
@@ -635,7 +516,7 @@ function TodayPage({ useApi, postApi, host, BASE, Page, Loading, ErrorState, Emp
         ] }),
         jsx(Card, { title: 'Próxima ação recomendada', icon: 'target', children: jsxs('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }, children: [
           jsxs('div', { children: [jsx('strong', { style: { display: 'block', fontSize: 18 }, children: nextStudyData?.session?.planned_topic || nextStudyData?.competency?.label || 'Nenhuma ação pendente' }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: nextStudyData?.reason || 'Aguardando recomendação' })] }),
-          nextStudyData?.session?.id && jsx(Navigate, { path: `${BASE}/lesson`, primary: true, icon: 'arrow-right', children: 'Abrir estudo' })
+          nextStudyData?.session?.id && jsx(Navigate, { primary: true, icon: 'arrow-right', onClick: () => { const id = nextStudyData.session.id; globalThis.sessionStorage?.setItem('gnos.selected-session', id); host.navigate(`${BASE}/lesson?session=${encodeURIComponent(id)}`) }, children: 'Abrir estudo' })
         ] }) }),
         jsxs('section', { style: css.grid, children: [
           jsx(Card, { title: 'Competências registradas', icon: 'symbol-class', children: jsxs('div', { children: [jsx('strong', { style: css.metric, children: evidence.length }), jsx('span', { style: { color: 'var(--muted-foreground)', fontSize: 13 }, children: 'nós com evidência' })] }) }),
@@ -882,7 +763,9 @@ function CourseExplorer({ courseId, onClose }) {
         kind: 'course',
         ids: { courseId, lessonId: portalLesson?.id },
         useApi,
-      })
+        postApi,
+        host,
+        })
     ]
   })
 }
@@ -1095,9 +978,9 @@ function Badge({ children, state }) {
     : { color: 'var(--muted-foreground)', background: 'color-mix(in srgb, var(--foreground) 5%, transparent)', border: '1px solid var(--border)' }
   return jsx('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 999, padding: '3px 10px', fontSize: 11.5, fontWeight: 640, letterSpacing: '-.005em', ...style }, children })
 }
-function Navigate({ path, children, primary = false, icon, onClick }) {
+function Navigate({ path, children, primary = false, icon, onClick, disabled = false }) {
   return jsxs('button', {
-    type: 'button', className: 'gnos-action', onClick: onClick || (() => host.navigate(path)), style: primary ? css.button : css.ghost, children: [
+    type: 'button', className: 'gnos-action', disabled, onClick: onClick || (() => host.navigate(path)), style: { ...(primary ? css.button : css.ghost), opacity: disabled ? .6 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }, children: [
       icon && jsx('span', { className: `codicon codicon-${icon}`, style: { marginRight: 6, fontSize: 13, verticalAlign: '-2px' } }),
       children
     ]
@@ -1161,7 +1044,7 @@ function Resources() {
   return jsx(ResourcesPage, { useApi, mutateApi, host, Page, Loading, ErrorState, Empty, Card, ListRow, Badge, css, artifactIcon, Pagination })
 }
 function Projects() {
-  return jsx(ProjectsPage, { useApi, host, BASE, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css })
+  return jsx(ProjectsPage, { useApi, postApi, mutateApi, host, Page, Loading, ErrorState, Empty, Card, Badge, Navigate, css })
 }
 
 const pages = [

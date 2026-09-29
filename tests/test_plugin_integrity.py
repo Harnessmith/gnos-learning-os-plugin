@@ -206,6 +206,53 @@ class PluginIntegrityTests(unittest.TestCase):
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["notes"][0]["text"], "Revisar DNS")
 
+    def test_projects_support_an_operational_append_only_workflow(self):
+        """A project is actionable only when its scope, status and evidence
+        can be persisted and read back without rewriting its activity trail."""
+        created = asyncio.run(plugin_api.create_project(plugin_api.ProjectCreateBody(
+            title="Observabilidade do serviço",
+            objective="Publicar métricas e alertas verificáveis",
+            competencies=["metrics", "alerts"],
+            next_step="Criar endpoint /metrics",
+        )))
+        project_id = created["project"]["id"]
+        self.assertEqual(created["project"]["status"], "planned")
+        self.assertEqual(created["project"]["progress_percent"], 0)
+
+        updated = asyncio.run(plugin_api.update_project(project_id, plugin_api.ProjectUpdateBody(
+            status="in_progress", next_step="Instrumentar a primeira rota"
+        )))
+        self.assertEqual(updated["project"]["status"], "in_progress")
+        self.assertEqual(updated["project"]["next_step"], "Instrumentar a primeira rota")
+
+        milestone = asyncio.run(plugin_api.create_project_milestone(project_id, plugin_api.ProjectMilestoneCreateBody(
+            title="Endpoint de métricas",
+        )))
+        milestone_id = milestone["milestone"]["id"]
+        asyncio.run(plugin_api.update_project_milestone(project_id, milestone_id, plugin_api.ProjectMilestoneUpdateBody(status="completed")))
+        activity = asyncio.run(plugin_api.create_project_activity(project_id, plugin_api.ProjectActivityCreateBody(
+            text="Endpoint publicado e verificado",
+        )))
+        evidence = asyncio.run(plugin_api.create_project_evidence(project_id, plugin_api.ProjectEvidenceCreateBody(
+            label="Verificação do endpoint", url="https://example.test/metrics"
+        )))
+        detail = asyncio.run(plugin_api.get_project(project_id))
+
+        self.assertEqual(detail["project"]["progress_percent"], 100)
+        self.assertEqual(len(detail["milestones"]), 1)
+        self.assertEqual(len(detail["activities"]), 1)
+        self.assertEqual(detail["activities"][0]["id"], activity["activity"]["id"])
+        self.assertEqual(len(detail["evidence"]), 1)
+        self.assertEqual(detail["evidence"][0]["id"], evidence["evidence"]["id"])
+
+    def test_project_completion_requires_all_milestones_completed(self):
+        project = asyncio.run(plugin_api.create_project(plugin_api.ProjectCreateBody(title="Projeto com marco")))
+        project_id = project["project"]["id"]
+        asyncio.run(plugin_api.create_project_milestone(project_id, plugin_api.ProjectMilestoneCreateBody(title="Entrega pendente")))
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(plugin_api.update_project(project_id, plugin_api.ProjectUpdateBody(status="completed")))
+        self.assertEqual(ctx.exception.status_code, 409)
+
     def test_review_queue_prioritizes_repair_needed(self):
         now = plugin_api._now()
         with plugin_api._connect() as conn, conn.cursor() as cur:
@@ -351,6 +398,32 @@ class PluginIntegrityTests(unittest.TestCase):
                 self.assertEqual(
                     done.returncode, 0, f"{path.name} is not valid JavaScript:\n{done.stderr}"
                 )
+
+    def test_p0_desktop_flows_preserve_the_selected_context_and_require_choice(self):
+        desktop = ROOT / "plugins" / "hermes-desktop" / "gnos-learning-os" / "desktop"
+        today = (desktop / "pages" / "today.js").read_text(encoding="utf-8")
+        timeline = (desktop / "pages" / "timeline.js").read_text(encoding="utf-8")
+        lesson = (desktop / "pages" / "lesson.js").read_text(encoding="utf-8")
+        lab = (desktop / "pages" / "lab.js").read_text(encoding="utf-8")
+        assessments = (desktop / "pages" / "assessments.js").read_text(encoding="utf-8")
+        projects = (desktop / "pages" / "projects.js").read_text(encoding="utf-8")
+        bundled = (desktop / "plugin.js").read_text(encoding="utf-8")
+
+        for source in (today, timeline, lesson, bundled):
+            self.assertIn("session=", source)
+        for source in (lesson, bundled):
+            self.assertIn("new URLSearchParams", source)
+        for source in (lab, bundled):
+            self.assertIn("selectedLabId", source)
+            self.assertNotIn("labs.data?.labs?.[0]?.id", source)
+        for source in (assessments, bundled):
+            self.assertIn("value: ''", source)
+            self.assertIn("!outcome", source)
+            self.assertNotIn("outcomes[assessment.id] || 'correct'", source)
+        for source in (projects, bundled):
+            self.assertIn("/milestones", source)
+            self.assertIn("/activities", source)
+            self.assertIn("/evidence", source)
 
 
 if __name__ == "__main__":

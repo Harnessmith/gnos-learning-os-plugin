@@ -337,6 +337,60 @@ class GnosPluginBackendTests(unittest.TestCase):
         self.assertIn("session.status === 'planned'", source)
         self.assertIn("/sessions/${session.id}/start", source)
 
+    def test_metrics_course_percentage_uses_completed_lesson_progress(self):
+        """Published lessons are available content, not completed study."""
+        now = self.api._now()
+        course_id = "course-metrics-progress"
+        with self.api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.courses "
+                "(id, title, chapters_json, sources_json, created_at, updated_at) "
+                "VALUES (%s, %s, '[]', '{}', %s, %s)",
+                (course_id, "Curso de métricas", now, now),
+            )
+            for lesson_id in ("lesson-metrics-1", "lesson-metrics-2"):
+                cur.execute(
+                    f"INSERT INTO {self.api.SCHEMA}.course_lessons "
+                    "(id, course_id, title, concepts_json, blocks_json, exercises_json, publication, updated_at) "
+                    "VALUES (%s, %s, %s, '[]', '[]', '[]', 'ready', %s)",
+                    (lesson_id, course_id, lesson_id, now),
+                )
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.lesson_progress "
+                "(course_id, lesson_id, state, viewed_at, completed_at, source, updated_at) "
+                "VALUES (%s, %s, 'completed', %s, %s, 'test', %s)",
+                (course_id, "lesson-metrics-1", now, now, now),
+            )
+            conn.commit()
+
+        result = self._run(self.api.get_metrics())
+        course = next(item for item in result["courses"] if item["course_id"] == course_id)
+
+        self.assertEqual(course["lessons_total"], 2)
+        self.assertEqual(course["lessons_ready"], 2)
+        self.assertEqual(course["lessons_completed"], 1)
+        self.assertEqual(course["lessons_viewed"], 0)
+        self.assertEqual(course["lessons_pending"], 1)
+        self.assertEqual(course["percent"], 50)
+
+    def test_portal_dialog_source_preserves_progress_protocol_and_a11y_contract(self):
+        source = (PLUGIN_DIR / "desktop" / "components" / "portal_dialog.js").read_text(encoding="utf-8")
+        lesson_source = (PLUGIN_DIR / "desktop" / "pages" / "lesson.js").read_text(encoding="utf-8")
+        self.assertIn("gnos:lesson-progress", source)
+        self.assertIn("postApi(`/courses/${message.courseId}/lessons/${message.lessonId}/progress`", source)
+        self.assertIn("event.source !== frameRef.current?.contentWindow", source)
+        self.assertIn("role: 'dialog'", source)
+        self.assertIn("'aria-modal': true", source)
+        self.assertIn("'aria-labelledby'", source)
+        self.assertIn("'aria-label': 'Fechar'", source)
+        self.assertIn("postApi,", lesson_source)
+        self.assertIn("host,", lesson_source)
+
+    def test_timeline_mutations_disable_actions_while_request_is_pending(self):
+        source = (PLUGIN_DIR / "desktop" / "pages" / "timeline.js").read_text(encoding="utf-8")
+        self.assertIn("primary: true, disabled: busy, onClick: saveSchedule", source)
+        self.assertIn("icon: 'play', disabled: busy, onClick: () => openSession(session)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

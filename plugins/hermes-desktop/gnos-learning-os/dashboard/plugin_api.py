@@ -347,6 +347,37 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.projects (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE {SCHEMA}.projects ADD COLUMN IF NOT EXISTS objective TEXT;
+ALTER TABLE {SCHEMA}.projects ADD COLUMN IF NOT EXISTS next_step TEXT;
+ALTER TABLE {SCHEMA}.projects ADD COLUMN IF NOT EXISTS completed_at TEXT;
+
+-- Project scope/status may be edited, but the learner's work record remains
+-- append-only so the detail view can never rewrite or hide prior evidence.
+CREATE TABLE IF NOT EXISTS {SCHEMA}.project_milestones (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES {SCHEMA}.projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'planned',
+    due_date TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.project_activities (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES {SCHEMA}.projects(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.project_evidence (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES {SCHEMA}.projects(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    url TEXT,
+    detail TEXT,
+    created_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS {SCHEMA}.labs (
     id TEXT PRIMARY KEY,
@@ -428,6 +459,9 @@ CREATE INDEX IF NOT EXISTS idx_timeline_session ON {SCHEMA}.timeline_entries(ses
 CREATE INDEX IF NOT EXISTS idx_timeline_source ON {SCHEMA}.timeline_entries(source);
 CREATE INDEX IF NOT EXISTS idx_attempts_assessment ON {SCHEMA}.attempts(assessment_id);
 CREATE INDEX IF NOT EXISTS idx_lab_checks_lab ON {SCHEMA}.lab_checks(lab_id);
+CREATE INDEX IF NOT EXISTS idx_project_milestones_project ON {SCHEMA}.project_milestones(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_project_activities_project ON {SCHEMA}.project_activities(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_project_evidence_project ON {SCHEMA}.project_evidence(project_id, created_at);
 
 CREATE TABLE IF NOT EXISTS {SCHEMA}.lesson_progress (
     course_id TEXT NOT NULL REFERENCES {SCHEMA}.courses(id) ON DELETE CASCADE,
@@ -670,6 +704,22 @@ def _lab_dict(row: dict) -> dict:
     return d
 
 
+def _project_dict(row: dict, milestones: list[dict] | None = None) -> dict:
+    """Expose legacy project rows and the new operational fields uniformly."""
+    d = dict(row)
+    raw_competencies = d.get("competencies") or "[]"
+    try:
+        d["competencies"] = json.loads(raw_competencies)
+    except (TypeError, json.JSONDecodeError):
+        d["competencies"] = [item.strip() for item in str(raw_competencies).split("-") if item.strip()]
+    milestone_rows = milestones or []
+    completed = sum(1 for milestone in milestone_rows if milestone["status"] == "completed")
+    d["milestones_total"] = len(milestone_rows)
+    d["milestones_completed"] = completed
+    d["progress_percent"] = round(completed * 100 / len(milestone_rows)) if milestone_rows else 0
+    return d
+
+
 # --------------------------------------------------------------------------
 # GET routes
 # --------------------------------------------------------------------------
@@ -885,6 +935,11 @@ async def get_metrics():
         courses = {r["id"]: dict(r) for r in cur.fetchall()}
         cur.execute(f"SELECT * FROM {SCHEMA}.course_lessons")
         lessons = [dict(r) for r in cur.fetchall()]
+        cur.execute(f"SELECT course_id, lesson_id, state FROM {SCHEMA}.lesson_progress")
+        lesson_progress = {
+            (r["course_id"], r["lesson_id"]): r["state"]
+            for r in cur.fetchall()
+        }
         cur.execute(
             f"SELECT a.*, s.track_id AS session_track_id FROM {SCHEMA}.assessments a "
             f"LEFT JOIN {SCHEMA}.sessions s ON s.id = a.session_id"
@@ -934,12 +989,22 @@ async def get_metrics():
     course_progress = []
     for course_id, course in courses.items():
         course_lessons = [l for l in lessons if l.get("course_id") == course_id]
-        published = sum(1 for l in course_lessons if l.get("publication") == "ready")
-        total = len(course_lessons) or 1
+        ready_lessons = [l for l in course_lessons if l.get("publication") == "ready"]
+        completed = sum(
+            1 for lesson in ready_lessons
+            if lesson_progress.get((course_id, lesson["id"])) == "completed"
+        )
+        viewed = sum(
+            1 for lesson in ready_lessons
+            if lesson_progress.get((course_id, lesson["id"])) == "viewed"
+        )
+        ready_total = len(ready_lessons)
         course_progress.append({
             "course_id": course_id, "title": course.get("title"),
-            "lessons_total": len(course_lessons), "lessons_ready": published,
-            "percent": round(published / total * 100),
+            "lessons_total": len(course_lessons), "lessons_ready": ready_total,
+            "lessons_completed": completed, "lessons_viewed": viewed,
+            "lessons_pending": max(0, ready_total - completed - viewed),
+            "percent": round(completed / ready_total * 100) if ready_total else 0,
         })
 
     tracks_out = sorted(by_track.values(), key=lambda t: -(t["minutes_real"] + t["sessions_total"]))
@@ -1623,17 +1688,6 @@ async def list_session_resources(session_id: str):
     return {"session_id": session_id, "resources": resources, "total": len(resources)}
 
 
-@router.get("/projects")
-async def list_projects():
-    _ensure_seeded()
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"SELECT * FROM {SCHEMA}.projects WHERE id LIKE 'project-course-%' ORDER BY created_at ASC"
-        )
-        rows = cur.fetchall()
-    return {"projects": [dict(r) for r in rows]}
-
-
 @router.get("/labs")
 async def list_labs():
     """List available labs so the renderer never depends on a fixture id."""
@@ -1692,6 +1746,202 @@ class ResourceAssociationBody(BaseModel):
     folder_id: Optional[str] = Field(default=None, max_length=180)
     lesson_id: Optional[str] = Field(default=None, max_length=180)
     competency_id: Optional[str] = Field(default=None, max_length=180)
+
+
+PROJECT_STATUSES = {"planned", "in_progress", "blocked", "completed", "archived"}
+MILESTONE_STATUSES = {"planned", "in_progress", "completed"}
+
+
+class ProjectCreateBody(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+    objective: Optional[str] = Field(default=None, max_length=2000)
+    competencies: list[str] = Field(default_factory=list, max_length=30)
+    next_step: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ProjectUpdateBody(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=180)
+    objective: Optional[str] = Field(default=None, max_length=2000)
+    competencies: Optional[list[str]] = Field(default=None, max_length=30)
+    status: Optional[str] = Field(default=None, max_length=40)
+    next_step: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ProjectMilestoneCreateBody(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    due_date: Optional[str] = Field(default=None, max_length=30)
+
+
+class ProjectMilestoneUpdateBody(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    status: Optional[str] = Field(default=None, max_length=40)
+    due_date: Optional[str] = Field(default=None, max_length=30)
+
+
+class ProjectActivityCreateBody(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+
+
+class ProjectEvidenceCreateBody(BaseModel):
+    label: str = Field(min_length=1, max_length=300)
+    url: Optional[str] = Field(default=None, max_length=2000)
+    detail: Optional[str] = Field(default=None, max_length=5000)
+
+
+def _load_project_detail(cur, project_id: str) -> tuple[dict, list[dict], list[dict], list[dict]]:
+    cur.execute(f"SELECT * FROM {SCHEMA}.projects WHERE id = %s", (project_id,))
+    project = cur.fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    cur.execute(f"SELECT * FROM {SCHEMA}.project_milestones WHERE project_id = %s ORDER BY created_at ASC", (project_id,))
+    milestones = [dict(row) for row in cur.fetchall()]
+    cur.execute(f"SELECT * FROM {SCHEMA}.project_activities WHERE project_id = %s ORDER BY created_at DESC", (project_id,))
+    activities = [dict(row) for row in cur.fetchall()]
+    cur.execute(f"SELECT * FROM {SCHEMA}.project_evidence WHERE project_id = %s ORDER BY created_at DESC", (project_id,))
+    evidence = [dict(row) for row in cur.fetchall()]
+    return _project_dict(project, milestones), milestones, activities, evidence
+
+
+@router.get("/projects")
+async def list_projects():
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM {SCHEMA}.projects ORDER BY updated_at DESC, created_at DESC")
+        rows = cur.fetchall()
+        cur.execute(f"SELECT * FROM {SCHEMA}.project_milestones ORDER BY created_at ASC")
+        milestones_by_project: dict[str, list[dict]] = {}
+        for milestone in cur.fetchall():
+            item = dict(milestone)
+            milestones_by_project.setdefault(item["project_id"], []).append(item)
+    return {"projects": [_project_dict(row, milestones_by_project.get(row["id"], [])) for row in rows]}
+
+
+@router.get("/projects/{project_id}")
+async def get_project(project_id: str):
+    _ensure_seeded()
+    with _connect() as conn, conn.cursor() as cur:
+        project, milestones, activities, evidence = _load_project_detail(cur, project_id)
+    return {"project": project, "milestones": milestones, "activities": activities, "evidence": evidence}
+
+
+@router.post("/projects")
+async def create_project(body: ProjectCreateBody):
+    _ensure_seeded()
+    now = _now()
+    project_id = f"project-user-{uuid.uuid4().hex}"
+    competencies = [item.strip() for item in body.competencies if item.strip()]
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {SCHEMA}.projects (id, title, competencies, status, objective, next_step, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'planned', %s, %s, %s, %s) RETURNING *",
+            (project_id, body.title.strip(), json.dumps(competencies), body.objective, body.next_step, now, now),
+        )
+        project = _project_dict(cur.fetchone())
+        conn.commit()
+    return {"project": project}
+
+
+@router.patch("/projects/{project_id}")
+async def update_project(project_id: str, body: ProjectUpdateBody):
+    _ensure_seeded()
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="nenhuma alteração informada")
+    if "status" in fields and fields["status"] not in PROJECT_STATUSES:
+        raise HTTPException(status_code=422, detail="status de projeto inválido")
+    if "competencies" in fields:
+        fields["competencies"] = json.dumps([item.strip() for item in fields["competencies"] if item.strip()])
+    fields["updated_at"] = _now()
+    with _connect() as conn, conn.cursor() as cur:
+        _load_project_detail(cur, project_id)
+        if fields.get("status") == "completed":
+            cur.execute(f"SELECT status FROM {SCHEMA}.project_milestones WHERE project_id = %s", (project_id,))
+            milestones = cur.fetchall()
+            if not milestones or any(row["status"] != "completed" for row in milestones):
+                raise HTTPException(status_code=409, detail="conclua todos os marcos antes de concluir o projeto")
+            fields["completed_at"] = fields["updated_at"]
+        assignments = ", ".join(f"{name} = %s" for name in fields)
+        cur.execute(f"UPDATE {SCHEMA}.projects SET {assignments} WHERE id = %s", (*fields.values(), project_id))
+        project, milestones, _, _ = _load_project_detail(cur, project_id)
+        conn.commit()
+    return {"project": project, "milestones": milestones}
+
+
+@router.post("/projects/{project_id}/milestones")
+async def create_project_milestone(project_id: str, body: ProjectMilestoneCreateBody):
+    _ensure_seeded()
+    now = _now()
+    milestone_id = f"milestone-{uuid.uuid4().hex}"
+    with _connect() as conn, conn.cursor() as cur:
+        _load_project_detail(cur, project_id)
+        cur.execute(
+            f"INSERT INTO {SCHEMA}.project_milestones (id, project_id, title, status, due_date, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'planned', %s, %s, %s) RETURNING *",
+            (milestone_id, project_id, body.title.strip(), body.due_date, now, now),
+        )
+        milestone = dict(cur.fetchone())
+        cur.execute(f"UPDATE {SCHEMA}.projects SET updated_at = %s WHERE id = %s", (now, project_id))
+        conn.commit()
+    return {"milestone": milestone}
+
+
+@router.patch("/projects/{project_id}/milestones/{milestone_id}")
+async def update_project_milestone(project_id: str, milestone_id: str, body: ProjectMilestoneUpdateBody):
+    _ensure_seeded()
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="nenhuma alteração informada")
+    if "status" in fields and fields["status"] not in MILESTONE_STATUSES:
+        raise HTTPException(status_code=422, detail="status de marco inválido")
+    fields["updated_at"] = _now()
+    assignments = ", ".join(f"{name} = %s" for name in fields)
+    with _connect() as conn, conn.cursor() as cur:
+        _load_project_detail(cur, project_id)
+        cur.execute(
+            f"UPDATE {SCHEMA}.project_milestones SET {assignments} WHERE id = %s AND project_id = %s RETURNING *",
+            (*fields.values(), milestone_id, project_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="milestone not found")
+        cur.execute(f"UPDATE {SCHEMA}.projects SET updated_at = %s WHERE id = %s", (fields["updated_at"], project_id))
+        conn.commit()
+    return {"milestone": dict(row)}
+
+
+@router.post("/projects/{project_id}/activities")
+async def create_project_activity(project_id: str, body: ProjectActivityCreateBody):
+    _ensure_seeded()
+    now = _now()
+    activity_id = f"project-activity-{uuid.uuid4().hex}"
+    with _connect() as conn, conn.cursor() as cur:
+        _load_project_detail(cur, project_id)
+        cur.execute(
+            f"INSERT INTO {SCHEMA}.project_activities (id, project_id, text, created_at) VALUES (%s, %s, %s, %s) RETURNING *",
+            (activity_id, project_id, body.text.strip(), now),
+        )
+        activity = dict(cur.fetchone())
+        cur.execute(f"UPDATE {SCHEMA}.projects SET updated_at = %s WHERE id = %s", (now, project_id))
+        conn.commit()
+    return {"activity": activity}
+
+
+@router.post("/projects/{project_id}/evidence")
+async def create_project_evidence(project_id: str, body: ProjectEvidenceCreateBody):
+    _ensure_seeded()
+    now = _now()
+    evidence_id = f"project-evidence-{uuid.uuid4().hex}"
+    with _connect() as conn, conn.cursor() as cur:
+        _load_project_detail(cur, project_id)
+        cur.execute(
+            f"INSERT INTO {SCHEMA}.project_evidence (id, project_id, label, url, detail, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+            (evidence_id, project_id, body.label.strip(), body.url, body.detail, now),
+        )
+        evidence = dict(cur.fetchone())
+        cur.execute(f"UPDATE {SCHEMA}.projects SET updated_at = %s WHERE id = %s", (now, project_id))
+        conn.commit()
+    return {"evidence": evidence}
 
 
 @router.get("/sessions/{session_id}/notes")
