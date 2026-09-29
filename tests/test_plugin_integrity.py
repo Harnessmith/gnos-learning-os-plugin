@@ -475,49 +475,32 @@ class PluginIntegrityTests(unittest.TestCase):
             self.assertTrue(Path(portal_path).is_file(),
                              "portal_path must resolve to the real file regardless of cwd")
 
-    def test_course_lesson_portal_always_includes_remote_html_fallback(self):
-        """CourseExplorer has the same SSH constraint as session lessons.
+    def test_course_lesson_portal_uses_small_tunneled_response(self):
+        """CourseExplorer must not transport a fully inlined course portal.
 
-        `portal_url` is a 127.0.0.1 address on the backend host; a renderer
-        connected over SSH cannot reach it. The course/lesson endpoint must
-        therefore include its rendered HTML even when the preferred material
-        URL was successfully minted.
+        The Desktop SSH bridge forwards the material URL, preserving a real HTTP
+        origin for embedded media while keeping the REST response small enough
+        to resolve promptly.
         """
         source = (ROOT / "plugins" / "hermes-desktop" / "gnos-learning-os" / "dashboard" / "plugin_api.py").read_text(encoding="utf-8")
         start = source.index("async def get_course_lesson_portal")
         route = source[start:source.index('@router.get("/assessments")', start)]
-        self.assertIn('"html": rendered', route)
+        self.assertIn('"server_portal_url": material_server.material_url', route)
         self.assertNotIn('"portal_url"', route)
 
-    def test_session_portal_returns_html_fallback_for_remote_desktop(self):
-        """Remote Desktop renderers cannot reach the backend's 127.0.0.1 origin.
+    def test_session_portal_uses_small_tunneled_response(self):
+        """A normal session response provides a material-server URL, not HTML.
 
-        The API must therefore include the rendered HTML alongside the loopback
-        URL, so the client can fall back to a data URL instead of showing a
-        blank iframe.
+        Returning an asset-inlined document through ctx.rest caused the modal to
+        stay at “Carregando conteúdo da aula…” before Desktop could invoke its
+        SSH URL bridge.
         """
-        temp_root = plugin_api.WORKSPACE_ROOT / "learners" / f"_test_remote_portal_{uuid.uuid4().hex}"
-        try:
-            temp_root.mkdir(parents=True)
-            portal = temp_root / "portal.html"
-            portal.write_text("<html><body><h1>Material remoto</h1></body></html>", encoding="utf-8")
-            with plugin_api._connect() as conn, conn.cursor() as cur:
-                cur.execute(
-                    f"UPDATE {self.schema}.sessions SET portal_path = %s "
-                    "WHERE id = 'session-devops-active'",
-                    (str(portal),),
-                )
-                conn.commit()
-
-            from unittest.mock import patch
-            with patch.object(plugin_api, "_read_portal_html", return_value="<h1>Material remoto</h1>"):
-                result = asyncio.run(plugin_api.get_session_portal("session-devops-active"))
-        finally:
-            import shutil
-            shutil.rmtree(temp_root, ignore_errors=True)
-
-        self.assertIn("Material remoto", result["html"])
+        from unittest.mock import patch
+        with patch.object(plugin_api.material_server, "material_url", return_value="http://127.0.0.1:9999/portal/token/index.html"):
+            result = asyncio.run(plugin_api.get_session_portal("session-devops-active"))
+        self.assertNotIn("html", result)
         self.assertNotIn("portal_url", result)
+        self.assertEqual(result["server_portal_url"], "http://127.0.0.1:9999/portal/token/index.html")
 
     def test_material_server_allows_renderer_read_probe(self):
         """The renderer probes a loopback portal before using it as iframe src."""

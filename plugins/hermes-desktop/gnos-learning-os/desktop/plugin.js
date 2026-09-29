@@ -173,19 +173,31 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi, postApi, h
             ? jsx(State, { children: 'Carregando conteúdo da aula…' })
             : error
               ? jsx(State, { children: `Não foi possível carregar conteúdo da aula: ${String(error?.message || error)}` })
-              : html
+              : reachablePortalUrl
                 ? jsx('iframe', {
                   ref: frameRef,
-                  key: `${kind}:${ids.sessionId || `${ids.courseId}/${ids.lessonId}`}:${reachablePortalUrl || 'inline'}`,
-                  src: reachablePortalUrl || undefined,
-                  srcDoc: reachablePortalUrl ? undefined : html,
+                  key: `${kind}:${ids.sessionId || `${ids.courseId}/${ids.lessonId}`}:${reachablePortalUrl}`,
+                  src: reachablePortalUrl,
                   title: title || 'Aula completa',
                   className: 'gnos-portal-frame',
                   sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms',
                   referrerPolicy: 'strict-origin-when-cross-origin',
                   style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' }
                 })
-                : jsx(State, { children: 'Nada em conteúdo renderizado ainda.' }),
+                : html
+                  ? jsx('iframe', {
+                    ref: frameRef,
+                    key: `${kind}:${ids.sessionId || `${ids.courseId}/${ids.lessonId}`}:inline`,
+                    srcDoc: html,
+                    title: title || 'Aula completa',
+                    className: 'gnos-portal-frame',
+                    sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms',
+                    referrerPolicy: 'strict-origin-when-cross-origin',
+                    style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' }
+                  })
+                  : serverPortalUrl
+                    ? jsx(State, { children: 'Conectando ao leitor da aula…' })
+                    : jsx(State, { children: 'Nada em conteúdo renderizado ainda.' }),
         }),
       ],
     }),

@@ -1081,18 +1081,17 @@ async def get_session_portal(session_id: str):
         row = cur.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    html = _read_portal_html(row.get("portal_path"))
-    # The material server lives on the SSH backend. The Desktop asks its SSH
-    # bridge to forward this URL before assigning it to the iframe, giving
-    # embedded media a genuine HTTP origin instead of an opaque srcdoc origin.
-    result = {"html": html}
+    # Prefer the material server's token-scoped HTTP document.  In the SSH
+    # topology, Desktop forwards this single URL before framing it.  Do *not*
+    # also inline the rendered portal here: real lessons can exceed 1 MB once
+    # CSS/JS/artifacts are embedded, which leaves the plugin REST query stuck
+    # in its loading state before the bridge can even be requested.
     try:
-        result["server_portal_url"] = material_server.material_url(f"session:{session_id}")
+        return {"server_portal_url": material_server.material_url(f"session:{session_id}")}
     except RuntimeError:
-        # Keep the authenticated HTML route usable while the material server
-        # starts or when the backend has no direct HTTP listener.
-        pass
-    return result
+        # Inline HTML is the no-listener fallback only. It remains useful for
+        # local/headless use, but is intentionally not sent in the normal path.
+        return {"html": _read_portal_html(row.get("portal_path"))}
 
 
 def _course_dict(row: dict) -> dict:
@@ -1512,24 +1511,30 @@ async def get_course_lesson_portal(course_id: str, lesson_id: str):
     lesson = next((item for item in lessons if item["id"] == lesson_id), None)
     if lesson is None:
         raise HTTPException(status_code=404, detail="lesson not found")
-    html = _read_portal_html(lesson.get("portal_path"))
-    state = _viewer_state(course_row, lessons, progress, lesson_id, html)
-    rendered = portal_viewer.inject_course_viewer(html, state)
-    # The material endpoint remains on the SSH server; the Desktop forwards it
-    # before using it as an iframe source so YouTube receives an HTTP Referer.
-    result = {
-        "course_id": course_id,
-        "lesson_id": lesson_id,
-        "position": state["focusIndex"] + 1,
-        "total": len(lessons),
-        "progress_state": (progress.get(lesson_id) or {}).get("state") or "pending",
-        "html": rendered,
-    }
+    # The token-scoped material document is the normal delivery path.  Avoid
+    # serialising a fully inlined portal (often >1 MB) through ctx.rest: that
+    # transport is what caused the Desktop modal to remain at “Carregando”.
     try:
-        result["server_portal_url"] = material_server.material_url(course_id, lesson_id)
+        return {
+            "course_id": course_id,
+            "lesson_id": lesson_id,
+            "position": next((i + 1 for i, item in enumerate(lessons) if item["id"] == lesson_id), 0),
+            "total": len(lessons),
+            "progress_state": (progress.get(lesson_id) or {}).get("state") or "pending",
+            "server_portal_url": material_server.material_url(course_id, lesson_id),
+        }
     except RuntimeError:
-        pass
-    return result
+        # Preserve an inline reader only when a material listener cannot start.
+        html = _read_portal_html(lesson.get("portal_path"))
+        state = _viewer_state(course_row, lessons, progress, lesson_id, html)
+        return {
+            "course_id": course_id,
+            "lesson_id": lesson_id,
+            "position": state["focusIndex"] + 1,
+            "total": len(lessons),
+            "progress_state": (progress.get(lesson_id) or {}).get("state") or "pending",
+            "html": portal_viewer.inject_course_viewer(html, state),
+        }
 
 
 @router.get("/assessments")
