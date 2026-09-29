@@ -347,7 +347,11 @@ def sync_lesson_session(workspace_root: Path, learner: str, course_id: str,
     # `blocks_json` — media blocks there only carry a caption (see
     # `_lesson_block_to_pair`). Record the portal's absolute path so the
     # Aula screen can open it directly, when the course has been rendered.
-    base = workspace_root / "learners" / learner / "courses" / course_id
+    # `workspace_root` may itself be relative (e.g. a bare `--workspace-root
+    # <dir>` CLI arg, or a caller running from a different cwd than the
+    # server that later reads this row) — resolve before persisting, or the
+    # portal route 404s the instant it is served from a different cwd.
+    base = (workspace_root / "learners" / learner / "courses" / course_id).resolve()
     portal_index = base / "portal" / "index.html"
     portal_path = str(portal_index) if portal_index.exists() else None
 

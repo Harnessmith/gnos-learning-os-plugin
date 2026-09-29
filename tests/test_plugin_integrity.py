@@ -426,5 +426,55 @@ class PluginIntegrityTests(unittest.TestCase):
             self.assertIn("/evidence", source)
 
 
+    def test_lesson_session_sync_persists_absolute_portal_path(self):
+        """Regression: `sync_lesson_session` must resolve `portal_path` to an
+        absolute path before persisting it, even when called with a relative
+        `workspace_root`. A relative path stored in the DB resolves against
+        whatever the *reading* process's cwd happens to be (the desktop
+        backend runs with cwd=$HOME, not the workspace), which 404s
+        `/sessions/{id}/portal` ("Nada em conteúdo renderizado ainda.") even
+        though the portal file exists on disk."""
+        import os
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root).resolve()
+            course_dir = root / "learners" / "joao" / "courses" / "curso-teste"
+            lesson_dir = course_dir / "lessons" / "licao-1"
+            portal_dir = course_dir / "portal"
+            lesson_dir.mkdir(parents=True)
+            portal_dir.mkdir(parents=True)
+            (course_dir / "course.json").write_text(
+                json.dumps({"title": "Curso Teste", "depth": "working", "current": {}}),
+                encoding="utf-8",
+            )
+            (lesson_dir / "lesson.json").write_text(
+                json.dumps({
+                    "title": "Lição 1", "publication": "ready", "teacher": "Didaktos",
+                    "purpose": "Ensinar o básico", "concepts": [],
+                    "updated_at": "2026-09-29T00:00:00+00:00", "blocks": [], "exercises": [],
+                }),
+                encoding="utf-8",
+            )
+            (portal_dir / "index.html").write_text("<html>ok</html>", encoding="utf-8")
+
+            cwd_before = os.getcwd()
+            try:
+                os.chdir(str(root))
+                relative_root = Path(".")  # exercises the bug: no .resolve() upstream
+                sync_evidence.sync_lesson_session(relative_root, "joao", "curso-teste", "licao-1")
+            finally:
+                os.chdir(cwd_before)
+
+            with plugin_api._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT portal_path FROM {self.schema}.sessions WHERE id = %s",
+                    ("session-curso-teste-licao-1",),
+                )
+                portal_path = cur.fetchone()["portal_path"]
+            self.assertTrue(Path(portal_path).is_absolute(),
+                             f"portal_path must be absolute, got {portal_path!r}")
+            self.assertTrue(Path(portal_path).is_file(),
+                             "portal_path must resolve to the real file regardless of cwd")
+
+
 if __name__ == "__main__":
     unittest.main()
