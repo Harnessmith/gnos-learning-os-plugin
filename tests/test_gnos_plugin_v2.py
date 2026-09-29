@@ -291,6 +291,52 @@ class GnosPluginBackendTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self._run(self.api.submit_assessment(assessment_id, bad))
 
+    def test_completing_a_course_session_completes_its_lesson_progress(self):
+        """The session checkmark and course progress cannot diverge."""
+        now = self.api._now()
+        course_id = "course-progress-link"
+        lesson_id = "lesson-progress-link"
+        session_id = f"session-{course_id}-{lesson_id}"
+        with self.api._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.courses "
+                "(id, title, chapters_json, sources_json, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (course_id, "Curso vinculado", "[]", "{}", now, now),
+            )
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.course_lessons "
+                "(id, course_id, title, concepts_json, blocks_json, exercises_json, publication, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'ready', %s)",
+                (lesson_id, course_id, "Aula vinculada", "[]", "[]", "[]", now),
+            )
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.tracks "
+                "(id, title, stage, status, source_type, source_id, competencies_json, created_at, updated_at) "
+                "VALUES (%s, 'Curso vinculado', 'working', 'practicing', 'course', %s, '[]', %s, %s)",
+                (f"track-course-{course_id}", course_id, now, now),
+            )
+            cur.execute(
+                f"INSERT INTO {self.api.SCHEMA}.sessions "
+                "(id, track_id, kind, planned_topic, planned_date, status, created_at, updated_at) "
+                "VALUES (%s, %s, 'lesson', 'Aula vinculada', %s, 'in_progress', %s, %s)",
+                (session_id, f"track-course-{course_id}", now[:10], now, now),
+            )
+            conn.commit()
+
+        completed = self._run(self.api.complete_session(session_id, self.api.SessionCompleteBody()))
+        course = self._run(self.api.get_course(course_id))
+
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(course["lessons"][0]["progress_state"], "completed")
+        self.assertEqual(course["progress"]["completed"], 1)
+
+    def test_bundled_timeline_opens_a_lesson_before_allowing_completion(self):
+        source = DESKTOP_JS.read_text(encoding="utf-8")
+        self.assertIn("Abrir aula", source)
+        self.assertIn("session.status === 'planned'", source)
+        self.assertIn("/sessions/${session.id}/start", source)
+
 
 if __name__ == "__main__":
     unittest.main()

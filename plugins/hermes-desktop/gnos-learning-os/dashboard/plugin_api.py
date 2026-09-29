@@ -1861,6 +1861,35 @@ async def complete_session(session_id: str, body: SessionCompleteBody):
             "completed_at = %s, updated_at = %s WHERE id = %s",
             (now[:10], actual_topic, body.actual_duration, body.next_step, now, now, session_id),
         )
+        # Older sync rows encode the relation in stable IDs rather than columns:
+        # track-course-<course-id> and session-<course-id>-<lesson-id>.
+        course_id = row.get("course_id")
+        lesson_id = row.get("lesson_id")
+        if not course_id and str(row.get("track_id") or "").startswith("track-course-"):
+            course_id = str(row["track_id"])[len("track-course-"):]
+        if course_id and not lesson_id:
+            cur.execute(
+                f"SELECT id FROM {SCHEMA}.course_lessons WHERE course_id = %s",
+                (course_id,),
+            )
+            prefix = f"session-{course_id}-"
+            lesson_id = next((candidate["id"] for candidate in cur.fetchall() if session_id == prefix + candidate["id"]), None)
+        # A session checkmark and its linked course lesson represent the same
+        # pedagogical completion. Keep both projections transactional so the
+        # schedule and lesson-progress views cannot diverge.
+        if course_id and lesson_id:
+            cur.execute(
+                f"""INSERT INTO {SCHEMA}.lesson_progress
+                        (course_id, lesson_id, state, viewed_at, completed_at, source, updated_at)
+                    VALUES (%s, %s, 'completed', %s, %s, 'session-checklist', %s)
+                    ON CONFLICT (course_id, lesson_id) DO UPDATE SET
+                        state = 'completed',
+                        viewed_at = COALESCE({SCHEMA}.lesson_progress.viewed_at, EXCLUDED.viewed_at),
+                        completed_at = COALESCE({SCHEMA}.lesson_progress.completed_at, EXCLUDED.completed_at),
+                        source = EXCLUDED.source,
+                        updated_at = EXCLUDED.updated_at""",
+                (course_id, lesson_id, now, now, now),
+            )
         cur.execute(
             f"INSERT INTO {SCHEMA}.timeline_entries (id, session_id, source, entry_date, kind, text, adaptive_reason, created_at) "
             "VALUES (%s, %s, 'actual', %s, %s, %s, NULL, %s)",
