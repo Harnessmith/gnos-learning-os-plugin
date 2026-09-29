@@ -58,10 +58,11 @@ class GnosDesktopPluginRendererTests(unittest.TestCase):
         self.assertNotIn("readFile", self.source)
         self.assertNotIn("child_process", self.source)
         self.assertNotIn("shell_exec", self.source)
-        # The sole exception is a CORS read-probe of the token-scoped
-        # loopback material URL. It selects the SSH-safe HTML fallback; it
-        # never reads user files or calls arbitrary endpoints.
-        self.assertEqual(self.source.count("fetch(portalUrl,"), 1)
+        # Lesson documents are supplied by the plugin backend as HTML. The
+        # renderer must not probe a backend-host loopback address: over SSH it
+        # may resolve to an unrelated client-local service or a blank frame.
+        self.assertNotIn("fetch(portalUrl,", self.source)
+        self.assertIn("srcDoc: html", self.source)
         # Every application read/write must go through ctx.rest, bound once in activate().
         self.assertIn("ctx.rest(path, opts)", self.source)
         self.assertIn("function rest(path, opts)", self.source)

@@ -87,48 +87,14 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi, postApi, h
     { enabled: Boolean(open) },
   )
   const html = data && typeof data === 'object' && 'html' in data ? data.html : (typeof data === 'string' ? data : null)
-  const dataUrl = html ? `data:text/html;base64,${btoa(unescape(encodeURIComponent(html)))}` : null
-  // Preferred transport: the loopback material origin. A `data:` page has an
-  // opaque origin, so an embedded video refuses to play (YouTube error 153)
-  // and relative artifact paths cannot resolve. The material origin is its own
-  // loopback port, so a course document stays cross-origin to the app: it has
-  // an origin of its own without access to the app DOM.
-  const portalUrl = data && typeof data === 'object' && typeof data.portal_url === 'string' && data.portal_url ? data.portal_url : null
-  const [frameUrl, setFrameUrl] = useState(null)
-  const [isResolvingFrame, setIsResolvingFrame] = useState(false)
-  // An SSH-connected renderer cannot reach the backend process's 127.0.0.1.
-  // Probe it before assigning iframe.src: use the real origin locally (so
-  // YouTube and relative assets work), otherwise use the backend-provided HTML
-  // fallback rather than display an empty white iframe.
-  useEffect(() => {
-    let cancelled = false
-    if (!open) {
-      setFrameUrl(null)
-      setIsResolvingFrame(false)
-      return undefined
-    }
-    if (!portalUrl || !html) {
-      setFrameUrl(portalUrl || dataUrl)
-      setIsResolvingFrame(false)
-      return undefined
-    }
-    setFrameUrl(null)
-    setIsResolvingFrame(true)
-    const controller = new AbortController()
-    const timer = window.setTimeout(() => controller.abort(), 2500)
-    fetch(portalUrl, { signal: controller.signal, credentials: 'omit' })
-      .then((response) => {
-        if (!response.ok) throw new Error(`material server returned ${response.status}`)
-        if (!cancelled) setFrameUrl(portalUrl)
-      })
-      .catch(() => { if (!cancelled) setFrameUrl(dataUrl) })
-      .finally(() => { if (!cancelled) setIsResolvingFrame(false) })
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-      controller.abort()
-    }
-  }, [open, portalUrl, dataUrl, html])
+  // Lesson HTML is rendered by the plugin backend and delivered through its
+  // authenticated REST response. Do not assign the backend host's 127.0.0.1
+  // URL to an iframe: under SSH it means the renderer's local machine, not the
+  // server that owns the lesson.
+  //
+  // `srcDoc` keeps the transport server-owned—no renderer-side filesystem
+  // access, loopback request, or CORS probe—and prevents a blank frame when
+  // the client has an unrelated service on that port.
   const frameRef = useRef(null)
   const closeButtonRef = useRef(null)
   const previousFocusRef = useRef(null)
@@ -150,9 +116,9 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi, postApi, h
   // forgettable UI state. When the frame is served from the material origin its
   // origin is known, so the message is only accepted from there; the base64
   // `data:` fallback has no origin to check beyond the message shape.
-  const portalOrigin = (() => {
-    try { return portalUrl ? new URL(portalUrl).origin : '' } catch { return '' }
-  })()
+  // `srcDoc` documents have an opaque origin. The event source check below
+  // still binds progress messages to this dialog's own iframe.
+  const portalOrigin = ''
   useEffect(() => {
     if (!open) return undefined
     portalProgressSeen.clear()
@@ -197,10 +163,8 @@ function PortalDialog({ open, onOpenChange, title, kind, ids, useApi, postApi, h
             ? jsx(State, { children: 'Carregando conteúdo da aula…' })
             : error
               ? jsx(State, { children: `Não foi possível carregar conteúdo da aula: ${String(error?.message || error)}` })
-              : isResolvingFrame
-              ? jsx(State, { children: 'Preparando conteúdo da aula…' })
-              : frameUrl
-                ? jsx('iframe', { ref: frameRef, key: frameUrl, src: frameUrl, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms', referrerPolicy: 'strict-origin-when-cross-origin', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
+              : html
+                ? jsx('iframe', { ref: frameRef, key: `${kind}:${ids.sessionId || `${ids.courseId}/${ids.lessonId}`}`, srcDoc: html, title: title || 'Aula completa', className: 'gnos-portal-frame', sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation allow-forms', referrerPolicy: 'strict-origin-when-cross-origin', style: { width: '100%', height: '100%', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)' } })
                 : jsx(State, { children: 'Nada em conteúdo renderizado ainda.' }),
         }),
       ],
