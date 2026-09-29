@@ -228,6 +228,66 @@ class GnosPluginBackendTests(unittest.TestCase):
                 self.api.WORKSPACE_ROOT = original_workspace_root
         self.assertIn("Conteúdo da aula", html)
 
+    def test_session_portal_prefers_the_loopback_origin_over_a_data_url(self):
+        """A `data:` transport has an opaque origin, so an embedded YouTube
+        video answers Erro 153 (see material_server.py's own rationale).
+        `/sessions/{id}/portal` must mint the same real-origin transport the
+        course/lesson portal route already uses, falling back to inline
+        `html` only when no portal file exists on disk to serve."""
+        with TemporaryDirectory() as tmp:
+            portal = Path(tmp) / "portal" / "index.html"
+            portal.parent.mkdir(parents=True)
+            portal.write_text(
+                "<iframe src='https://www.youtube-nocookie.com/embed/x'></iframe>",
+                encoding="utf-8",
+            )
+            now = self.api._now()
+            with self.api._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE {self.api.SCHEMA}.sessions SET portal_path = %s, "
+                    "updated_at = %s WHERE id = 'session-course-test'",
+                    (str(portal), now),
+                )
+                conn.commit()
+            result = self._run(self.api.get_session_portal("session-course-test"))
+            self.assertIn("portal_url", result)
+            self.assertTrue(result["portal_url"].startswith("http://127.0.0.1:"))
+            self.assertNotIn("html", result)
+
+    def test_session_portal_falls_back_to_inline_html_without_a_portal_file(self):
+        """When the loopback origin cannot be minted (e.g. material_server
+        unavailable), the route must still answer with the legacy inline-html
+        contract rather than error out."""
+        with TemporaryDirectory() as tmp:
+            original_workspace_root = self.api.WORKSPACE_ROOT
+            workspace_root = Path(tmp) / "workspace"
+            portal = (
+                workspace_root / "learners" / "airflow" / "courses" / "course" /
+                "portal" / "index.html"
+            )
+            portal.parent.mkdir(parents=True)
+            portal.write_text("<main>Conteúdo da aula</main>", encoding="utf-8")
+            self.api.WORKSPACE_ROOT = workspace_root
+            now = self.api._now()
+            try:
+                with self.api._connect() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE {self.api.SCHEMA}.sessions SET portal_path = %s, "
+                        "updated_at = %s WHERE id = 'session-course-test'",
+                        (str(portal), now),
+                    )
+                    conn.commit()
+                with patch.object(
+                    self.api.material_server, "material_url",
+                    side_effect=RuntimeError("material origin unavailable"),
+                ):
+                    result = self._run(self.api.get_session_portal("session-course-test"))
+            finally:
+                self.api.WORKSPACE_ROOT = original_workspace_root
+        self.assertIn("html", result)
+        self.assertNotIn("portal_url", result)
+        self.assertIn("Conteúdo da aula", result["html"])
+
     def test_timeline_planned_is_never_mutated_by_session_actions(self):
         before = self._run(self.api.get_timeline())
         planned_before = before["planned"]

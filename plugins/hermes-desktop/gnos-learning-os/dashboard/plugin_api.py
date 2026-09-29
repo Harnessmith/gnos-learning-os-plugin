@@ -1028,18 +1028,30 @@ async def get_metrics():
 @router.get("/sessions/{session_id}/portal")
 async def get_session_portal(session_id: str):
     """Full rendered lesson HTML (diagrams, KaTeX, highlighted code) for the
-    'Ver aula completa' button. Returned as JSON `{html: str}` so the
-    desktop renderer can embed it via `<SandboxedFrame src="data:text/html;..."
-    />` instead of trying to open a server-local filesystem path in the
-    user's OS browser (which only works when gateway and Electron share a
-    filesystem — never true for a remote/SSH connection)."""
+    'Ver aula completa' button.
+
+    Preferred transport: the loopback material origin (see
+    `_material_course_root`/`material_server`), the same one the course/lesson
+    portal route uses. A session document embeds cited YouTube videos, and an
+    embedded video refuses to play behind a `data:` URL — that URL has an
+    opaque origin, and YouTube's player answers "Erro 153 (configuration
+    error)" for any origin it cannot identify. `data:` HTML is kept only as a
+    fallback for when the loopback origin cannot be minted (e.g. no portal on
+    disk), matching the lesson-portal route's contract."""
     _ensure_seeded()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT portal_path FROM {SCHEMA}.sessions WHERE id = %s", (session_id,))
         row = cur.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    html = _read_portal_html(row.get("portal_path"))
+    portal_url = ""
+    try:
+        portal_url = material_server.material_url(f"session:{session_id}")
+    except Exception:
+        log.warning("material origin unavailable for session %s", session_id, exc_info=True)
+    if portal_url:
+        return {"portal_url": portal_url}
+    html = _read_portal_html(row.get("portal_path"))     # fallback: data: transport
     return {"html": html}
 
 
@@ -1372,7 +1384,26 @@ async def get_course(course_id: str):
 
 
 def _material_course_root(course_id: str) -> tuple[Path, str]:
-    """(course root, portal path inside it) for the loopback material origin."""
+    """(course root, portal path inside it) for the loopback material origin.
+
+    `course_id` doubles as a session key: a `session:<id>` prefix resolves
+    against `sessions.portal_path` instead of `course_lessons.portal_path`,
+    so `/sessions/{id}/portal` can mint the same real-origin transport that
+    the course/lesson portal route uses (a `data:` transport gives an
+    embedded video an opaque origin, which YouTube's player rejects with
+    Erro 153)."""
+    if course_id.startswith("session:"):
+        session_id = course_id[len("session:"):]
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT portal_path FROM {SCHEMA}.sessions WHERE id = %s",
+                (session_id,),
+            )
+            row = cur.fetchone()
+        if row is None or not row["portal_path"]:
+            raise HTTPException(status_code=404, detail="portal not found")
+        portal = Path(row["portal_path"]).resolve()
+        return portal.parent.parent, str(portal.relative_to(portal.parent.parent))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             f"SELECT portal_path FROM {SCHEMA}.course_lessons "
@@ -1388,7 +1419,12 @@ def _material_course_root(course_id: str) -> tuple[Path, str]:
 
 
 def _material_render_entry(course_id: str, lesson_id: str, html: str) -> str:
-    """Viewer layer for a served portal: sequence, one lesson at a time, OK, progress."""
+    """Viewer layer for a served portal: sequence, one lesson at a time, OK, progress.
+
+    A `session:<id>` key (see `_material_course_root`) has no course/lesson
+    sequence to inject — a standalone session document is served as-is."""
+    if course_id.startswith("session:"):
+        return html
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT * FROM {SCHEMA}.courses WHERE id = %s", (course_id,))
         course_row = cur.fetchone()
